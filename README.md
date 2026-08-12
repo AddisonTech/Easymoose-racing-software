@@ -62,6 +62,75 @@ Transmit power, session and search mode are starting points in `reader.py`,
 not validated numbers. Tune them against the real antennas, real tags and a
 real field before trusting them at an event.
 
+### Two clocks
+
+Read timestamps come from the reader's own clock, via the LLRP
+FirstSeenTimestampUTC field. The gun time comes from the Pi's clock, because
+that is what the operator's button press lands on. Those are two independent
+clocks and nothing keeps them in step, so comparing a read against the gun
+time raw is comparing two unrelated numbers. A reader a minute out would shift
+or destroy every start in the race, quietly.
+
+The software handles this itself. On connect it measures the difference
+between the reader's clock and the Pi's, preferring the UTCTimestamp the
+reader sends in its connection event and falling back to the first tag report
+if the reader does not send one. When you confirm START, the gun time is
+recorded twice: once as the Pi saw it, and once converted into the reader's
+clock domain. Only the converted one is compared against reads. Read
+timestamps themselves are never adjusted; they stay exactly as the reader
+reported them.
+
+The measured offset appears on the reader status line as soon as the reader
+attaches. Past two seconds it also raises a warning on screen. Times are still
+corrected at any offset, but a gap that wide means something is wrong with the
+setup and is worth fixing before the gun rather than trusting the arithmetic.
+
+The console will refuse to record a gun time if no reader is attached, or if
+the offset has not been measured yet, because there would be nothing to
+convert it with. If it says the offset is not measured, present a tag to an
+antenna and try again.
+
+### Keeping the reader's clock close: chrony
+
+Correcting for the offset is the first layer and it works on its own. Keeping
+the clocks close anyway is the second, and it makes the numbers in the logs
+and the exports easier to reason about when something needs investigating.
+
+Run the Pi as the reader's time source:
+
+    sudo apt install chrony
+
+Then in `/etc/chrony/chrony.conf`, serve the local network and keep serving
+time even when the Pi itself has no upstream, which is the normal case at a
+race in a field:
+
+    allow 192.168.1.0/24
+    local stratum 10
+
+Restart it and check it is listening:
+
+    sudo systemctl restart chrony
+    chronyc clients
+
+Then point the reader at it: in the R420's web interface, under the network or
+time settings, set the NTP server to the Pi's IP address. Give it a few
+minutes and the offset on the console should settle near zero.
+
+### The Pi has no real time clock
+
+A Raspberry Pi has no battery backed clock. With no network at boot it comes
+up believing whatever `fake-hwclock` wrote down when it was last shut down,
+which can be days out.
+
+Elapsed times are unaffected, because they are differences between two reads
+and a wrong clock shifts both ends equally. What does go wrong is everything
+absolute: the race date, the timestamps in export filenames, and the times of
+day shown in the results and the exports.
+
+If the Pi will be used offline, a DS3231 module on the I2C header fixes it for
+a couple of pounds. Optional, not required, and nothing in the software
+depends on it.
+
 ## Simulate mode
 
 No reader, no antennas, no tags:
@@ -78,6 +147,8 @@ times and the results come out as a real 5K.
 
     --sim-speed 60         playback compression
     --sim-seed 1           change it for a different race, keep it to repeat one
+    --sim-clock-skew 0     seconds the simulated reader's clock runs ahead of
+                           the Pi, for exercising the offset correction
 
 Import a participant CSV before starting simulate mode: the simulator needs to
 know who is running.
@@ -172,13 +243,18 @@ the Pi.
 
     .venv/bin/python -m pytest
 
-61 tests, a couple of seconds. They cover the timing rules at their edges
-(pre-gun reads ignored, burst collapsing, minimum elapsed rejection including a
-burst that straddles the cutoff, dual tag selection, DNF and review), the
-storage layer, the CSV import and export, and the web endpoints. The one that
-matters most checks that live processing and a recompute from the read log
-produce identical results: what the operator reads off the screen during the
-race has to be what gets published afterwards.
+76 tests, a few seconds. They cover the timing rules at their edges (pre-gun
+reads ignored, burst collapsing, minimum elapsed rejection including a burst
+that straddles the cutoff, dual tag selection, DNF and review), the storage
+layer, the CSV import and export, and the web endpoints.
+
+Two of them matter more than the rest. One checks that live processing and a
+recompute from the read log produce identical results: what the operator reads
+off the screen during the race has to be what gets published afterwards. The
+other runs a whole race with the reader's clock 37 seconds out and demands the
+results come out right anyway, because a simulator that stamps reads from the
+same clock the gun comes from assumes away the worst bug this software can
+have.
 
 ## Layout
 
