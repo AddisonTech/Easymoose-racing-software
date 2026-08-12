@@ -195,6 +195,10 @@ race has to be what gets published afterwards.
 
 ## Licence
 
-This software is MIT, see `LICENSE`. Note that sllurp, the LLRP library, is
-GPL-3.0-only, which has implications for how a combined work can be
-distributed. Flask is BSD-3-Clause and pytest is MIT.
+GPL-3.0-only. The full text is in `LICENSE`.
+
+The choice is not really a choice: sllurp, the LLRP library this depends on to
+talk to the reader at all, is GPL-3.0-only, and a combined work that links it
+has to be distributed under the same terms. The other dependencies are more
+permissive and impose nothing here: Flask is BSD-3-Clause, pytest is MIT, and
+SQLite is public domain.
