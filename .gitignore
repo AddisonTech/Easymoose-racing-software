@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Race data stays on the Pi. Keep the directory, never the races in it.
+races/*
+!races/.gitkeep
