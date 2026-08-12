@@ -44,6 +44,18 @@ def burst(epc: str, port: int, start_seconds: float, count: int = 20,
     return [read(epc, port, start_seconds + index * spacing) for index in range(count)]
 
 
+def csv_for(people) -> str:
+    """A participant CSV covering a simulator field."""
+    lines = ["bib,first_name,last_name,age,gender,epc1,epc2"]
+    for index, person in enumerate(people):
+        epcs = list(person.epcs) + [""]
+        lines.append(
+            f"{person.bib},Runner,Number{index},{30 + index % 40},"
+            f"{'F' if index % 2 else 'M'},{epcs[0]},{epcs[1]}"
+        )
+    return "\n".join(lines) + "\n"
+
+
 @pytest.fixture
 def sim_race():
     """A generated 40 runner race: the participants and the whole read log."""

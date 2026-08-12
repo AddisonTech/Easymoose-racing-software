@@ -14,7 +14,7 @@ import threading
 import time
 
 import pytest
-from conftest import GUN
+from conftest import GUN, csv_for
 
 from app import Console, LiveSession, create_app
 from db import RaceDB, parse_participant_csv
@@ -38,17 +38,6 @@ class ReplayReader(Reader):
 
     def stop(self):
         self._stopped.set()
-
-
-def csv_for(people) -> str:
-    lines = ["bib,first_name,last_name,age,gender,epc1,epc2"]
-    for index, person in enumerate(people):
-        epcs = list(person.epcs) + [""]
-        lines.append(
-            f"{person.bib},Runner,Number{index},{30 + index % 40},"
-            f"{'F' if index % 2 else 'M'},{epcs[0]},{epcs[1]}"
-        )
-    return "\n".join(lines) + "\n"
 
 
 @pytest.fixture

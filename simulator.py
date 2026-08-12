@@ -97,6 +97,13 @@ class SimulatedReader(Reader):
     speed compresses playback only. The timestamps carried on the reads are
     real race times, so a demo that finishes in half a minute still produces
     28 minute 5K results.
+
+    clock_skew_seconds models the thing a real reader does and a naive
+    simulator does not: the reader stamps reads from its own clock, which is
+    not the Pi's clock. A positive skew puts the reader ahead of the Pi. It is
+    applied to every timestamp this reader emits, exactly as a real reader
+    with a wrong clock would, and is reported through clock_offset_micros the
+    same way LLRPReader reports its measured offset.
     """
 
     def __init__(
@@ -104,6 +111,7 @@ class SimulatedReader(Reader):
         participants: Sequence[SimParticipant],
         seed: int = 1,
         speed: float = 60.0,
+        clock_skew_seconds: float = 0.0,
         pre_gun_seconds: float = 300.0,
         drop_probability: float = 0.15,
         tag_failure_probability: float = 0.04,
@@ -119,6 +127,8 @@ class SimulatedReader(Reader):
         self.participants = list(participants)
         self.seed = seed
         self.speed = speed
+        self.clock_skew_seconds = clock_skew_seconds
+        self._skew_micros = int(round(clock_skew_seconds * MICROS))
         self.pre_gun_seconds = pre_gun_seconds
         self.drop_probability = drop_probability
         self.tag_failure_probability = tag_failure_probability
@@ -267,12 +277,30 @@ class SimulatedReader(Reader):
     # consumption
     # ------------------------------------------------------------------
 
+    @property
+    def clock_offset_micros(self) -> int:
+        """Reader clock minus Pi clock, in microseconds.
+
+        A real reader has to measure this. A simulated one already knows it,
+        because it is the skew it was told to apply.
+        """
+        return self._skew_micros
+
+    @property
+    def clock_offset_source(self) -> str:
+        return "simulated"
+
     def _rebase(self, entries, gun_utc: int) -> list[TagRead]:
+        """Offsets to absolute times, in the reader's clock domain.
+
+        gun_utc is a Pi clock instant. The reader stamps its reads from its own
+        clock, so the skew lands on every timestamp that leaves here.
+        """
         return [
             TagRead(
                 epc=epc,
                 antenna_port=port,
-                first_seen_utc=gun_utc + int(round(offset * MICROS)),
+                first_seen_utc=gun_utc + int(round(offset * MICROS)) + self._skew_micros,
                 rssi=rssi,
             )
             for epc, port, offset, rssi in entries
@@ -320,7 +348,7 @@ class SimulatedReader(Reader):
         while not self._stopped.is_set() and not self._started.is_set():
             if self.participants:
                 plan = rng.choice(self._plans)
-                now_utc = int(time.time() * MICROS)
+                now_utc = int(time.time() * MICROS) + self._skew_micros
                 for epc in plan.person.epcs:
                     for index in range(rng.randint(2, 8)):
                         yield TagRead(
@@ -338,7 +366,11 @@ class SimulatedReader(Reader):
         for read in self.race_reads(self._gun_utc):
             if self._stopped.is_set():
                 return
-            offset_seconds = (read.first_seen_utc - self._gun_utc) / MICROS
+            # Pacing is wall clock work, so the skew comes back off here. It
+            # belongs on the timestamp, not on when the read is handed over.
+            offset_seconds = (
+                read.first_seen_utc - self._gun_utc - self._skew_micros
+            ) / MICROS
             due = started_wall + offset_seconds / self.speed
             wait = due - time.monotonic()
             if wait > 0:
