@@ -171,6 +171,110 @@ def test_the_gun_is_refused_while_the_offset_is_unknown(tmp_path):
         session.stop()
 
 
+@pytest.mark.parametrize(
+    "offset_seconds, expect_warning",
+    [(0.0, False), (1.9, False), (2.0, False), (2.1, True), (-2.1, True), (-37.0, True)],
+)
+def test_the_console_warns_only_past_two_seconds(tmp_path, offset_seconds, expect_warning):
+    race, _ = race_with_skew(tmp_path, 0.0, f"Warn {offset_seconds}")
+    session = LiveSession(race, SilentReader(int(offset_seconds * MICROS)), "test")
+    try:
+        reader_state = build_state(race, session)["reader"]
+        assert reader_state["clock_offset_seconds"] == pytest.approx(offset_seconds)
+        assert reader_state["clock_warning"] is expect_warning
+    finally:
+        session.stop()
+
+
+def test_an_unmeasured_offset_shows_as_unknown_rather_than_zero(tmp_path):
+    race, _ = race_with_skew(tmp_path, 0.0, "Unknown Offset")
+    session = LiveSession(race, SilentReader(None), "test")
+    try:
+        reader_state = build_state(race, session)["reader"]
+        assert reader_state["clock_offset_seconds"] is None
+        assert reader_state["clock_warning"] is False
+    finally:
+        session.stop()
+
+
+def test_a_whole_simulate_run_survives_a_skewed_reader_clock(tmp_path):
+    """The operator path, end to end, with the reader's clock 37 seconds out.
+
+    This is the case the old simulator could not express at all, which is why
+    the defect lived through a green suite and a working demo.
+    """
+    console = Console(
+        root=tmp_path / "races",
+        simulate=True,
+        reader_host="127.0.0.1",
+        reader_port=5084,
+        tx_power_dbm=30.0,
+        sim_speed=20000.0,
+        sim_seed=6,
+        sim_clock_skew=SKEW_SECONDS,
+    )
+    console.root.mkdir(parents=True, exist_ok=True)
+    app = create_app(console)
+    app.config.update(TESTING=True)
+
+    with app.test_client() as client:
+        response = client.post("/races", data={"name": "Skewed Clock", "date": "2026-08-12",
+                                               "distance": "5K", "min_elapsed_seconds": "720"})
+        slug = response.headers["Location"].rsplit("/", 1)[-1]
+
+        people = make_participants(12, seed=6)
+        client.post(
+            f"/races/{slug}/participants",
+            data={"file": (io.BytesIO(csv_for(people).encode()), "field.csv")},
+            content_type="multipart/form-data",
+        )
+        client.post(f"/races/{slug}/live")
+        simulated_reader = console.session.reader
+        race = console.session.race
+        try:
+            assert client.post(f"/races/{slug}/start").get_json()["ok"] is True
+
+            deadline = time.monotonic() + 60
+            settled, previous = 0, -1
+            while time.monotonic() < deadline and settled < 5:
+                count = client.get(f"/api/races/{slug}/state").get_json()["reader"]["read_count"]
+                settled = settled + 1 if count == previous and count > 0 else 0
+                previous = count
+                time.sleep(0.2)
+
+            state = client.get(f"/api/races/{slug}/state").get_json()
+            assert state["reader"]["clock_offset_seconds"] == pytest.approx(SKEW_SECONDS)
+            assert state["reader"]["clock_warning"] is True
+            assert state["race"]["gun_time_reader_utc"] == (
+                state["race"]["gun_time_utc"] + int(SKEW_SECONDS * MICROS)
+            )
+
+            # The point of the whole exercise: the field is timed correctly
+            # despite the clocks disagreeing. Against the unfixed code a skew
+            # this size wrecks starts wholesale and the review pile fills up,
+            # so the runner the simulator deliberately denied a start should
+            # be the only one in it.
+            assert state["summary"]["finished"] > 0
+            assert all(row["elapsed_seconds"] >= 720 for row in state["finishers"])
+
+            reviewed = {p["bib"] for p in state["participants"] if p["status"] == "review"}
+            assert reviewed == set(simulated_reader.expected_review_bibs)
+
+            # Statuses alone are too blunt to catch this: a 37 second error
+            # moves every start without pushing anyone across a status
+            # boundary. Check the instants. Every runner crosses the start
+            # line within a few seconds of the gun, and the pre-gun milling
+            # reads a skewed clock drags forward would land before it.
+            live_results, _, _, _ = console.session.snapshot()
+            gun_reader = race.info().gun_time_reader_utc
+            starts = [r.start_utc for r in live_results if r.start_utc is not None]
+            assert starts, "nobody started"
+            for start_utc in starts:
+                assert 0 <= start_utc - gun_reader <= 20 * MICROS
+        finally:
+            console.stop_live()
+
+
 def test_the_column_is_added_to_a_database_that_predates_it(tmp_path):
     race, _ = race_with_skew(tmp_path, 0.0, "Older Schema")
     directory = race.directory

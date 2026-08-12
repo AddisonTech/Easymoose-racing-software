@@ -74,6 +74,19 @@ main { padding: 1.1rem; max-width: 1100px; margin: 0 auto; }
 }
 .label { color: var(--dim); font-size: 0.85rem; }
 
+/* The operator has to see a bad reader clock during setup, not afterwards in
+   the results, so this sits directly under the reader status line. */
+.clock-warning {
+  margin-top: 0.4rem;
+  max-width: 26rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid #6b551c;
+  background: #2a2413;
+  color: #ffd479;
+  font-size: 0.82rem;
+}
+
 .counts { display: flex; gap: 1.4rem; flex-wrap: wrap; }
 .count { text-align: center; }
 .count span { display: block; font-size: 1.9rem; font-variant-numeric: tabular-nums; }

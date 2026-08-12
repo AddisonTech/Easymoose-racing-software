@@ -122,6 +122,23 @@
     list.innerHTML = html;
   }
 
+  function renderClockWarning(state, offset) {
+    /* The software corrects for the offset whatever its size, so this is not
+       an error. It is a sign the setup is wrong, and the operator wants to
+       know that now rather than from the results afterwards. */
+    var box = el("clock-warning");
+    if (!state.live || !state.reader.clock_warning || offset === null) {
+      box.hidden = true;
+      return;
+    }
+    box.textContent =
+      "Reader clock is " + Math.abs(offset).toFixed(1) + " s " +
+      (offset > 0 ? "ahead of" : "behind") + " the Pi. Times are corrected for this, " +
+      "but point the reader at the Pi's NTP server before the race: see Reader " +
+      "configuration in the README.";
+    box.hidden = false;
+  }
+
   function escapeHtml(value) {
     return String(value === null || value === undefined ? "" : value)
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -139,15 +156,20 @@
     text(el("c-course"), s.on_course);
     text(el("c-review"), s.review);
 
+    var offset = state.reader.clock_offset_seconds;
     var line;
     if (!state.live) {
       line = "reader not attached, showing stored results";
     } else if (state.reader.error) {
       line = "reader error: " + state.reader.error;
     } else {
-      line = state.reader.mode + ", " + state.reader.read_count + " reads logged";
+      line = state.reader.mode + ", " + state.reader.read_count + " reads logged, " +
+        (offset === null || offset === undefined
+          ? "clock offset not measured yet"
+          : "clock offset " + (offset >= 0 ? "+" : "") + offset.toFixed(1) + " s");
     }
     text(el("reader-line"), line);
+    renderClockWarning(state, offset);
 
     renderFinishers(state.finishers);
     renderParticipants(state.participants);
