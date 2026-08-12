@@ -6,7 +6,11 @@ a generated read log without any hardware.
 
 The rules, in the order they are applied:
 
-  gun time     Recorded by the operator when the race starts.
+  gun time     Recorded by the operator when the race starts, and converted
+               into the reader's clock domain before it gets here. Reads are
+               stamped by the reader and the gun is taken from the Pi, so
+               comparing the two raw would be comparing two unrelated clocks.
+               Everything below expects gun_time_reader_utc.
 
   start        The first read of any of the participant's EPCs on a start
                antenna at or after the gun. Reads before the gun are logged but
@@ -129,11 +133,11 @@ def crossings_at_line(
 
 def start_crossing(
     reads: Sequence[TagRead],
-    gun_time_utc: int,
+    gun_time_reader_utc: int,
     gap_seconds: float = BURST_GAP_SECONDS,
 ) -> int | None:
     """First start line crossing at or after the gun, for a single tag."""
-    crossings = crossings_at_line(reads, START_ANTENNAS, gun_time_utc, gap_seconds)
+    crossings = crossings_at_line(reads, START_ANTENNAS, gun_time_reader_utc, gap_seconds)
     return crossings[0] if crossings else None
 
 
@@ -163,7 +167,7 @@ def _earliest(values: Iterable[int | None]) -> int | None:
 def compute_result(
     participant: Participant,
     reads_by_epc: dict[str, list[TagRead]],
-    gun_time_utc: int,
+    gun_time_reader_utc: int,
     min_elapsed_seconds: float = DEFAULT_MIN_ELAPSED_SECONDS,
     gap_seconds: float = BURST_GAP_SECONDS,
 ) -> ParticipantResult:
@@ -171,7 +175,7 @@ def compute_result(
     tag_reads = [reads_by_epc.get(epc, []) for epc in participant.epcs]
 
     start_utc = _earliest(
-        start_crossing(reads, gun_time_utc, gap_seconds) for reads in tag_reads
+        start_crossing(reads, gun_time_reader_utc, gap_seconds) for reads in tag_reads
     )
 
     finish_utc = None
@@ -192,7 +196,7 @@ def compute_result(
         # guess what their start was, so it goes to a human.
         elapsed = None
         seen_at_finish = _earliest(
-            (crossings_at_line(reads, FINISH_ANTENNAS, gun_time_utc, gap_seconds) or [None])[0]
+            (crossings_at_line(reads, FINISH_ANTENNAS, gun_time_reader_utc, gap_seconds) or [None])[0]
             for reads in tag_reads
         )
         finish_utc = seen_at_finish
@@ -211,7 +215,7 @@ def compute_result(
 def compute_results(
     reads: Iterable[TagRead],
     participants: Sequence[Participant],
-    gun_time_utc: int | None,
+    gun_time_reader_utc: int | None,
     min_elapsed_seconds: float = DEFAULT_MIN_ELAPSED_SECONDS,
     gap_seconds: float = BURST_GAP_SECONDS,
 ) -> list[ParticipantResult]:
@@ -219,7 +223,7 @@ def compute_results(
 
     A race with no gun time has not started, so nobody has a result yet.
     """
-    if gun_time_utc is None:
+    if gun_time_reader_utc is None:
         return [
             ParticipantResult(p.participant_id, p.bib, None, None, None, STATUS_NOT_STARTED)
             for p in participants
@@ -227,7 +231,7 @@ def compute_results(
 
     reads_by_epc = index_reads_by_epc(reads)
     return [
-        compute_result(p, reads_by_epc, gun_time_utc, min_elapsed_seconds, gap_seconds)
+        compute_result(p, reads_by_epc, gun_time_reader_utc, min_elapsed_seconds, gap_seconds)
         for p in participants
     ]
 

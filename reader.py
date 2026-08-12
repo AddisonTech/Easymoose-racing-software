@@ -6,6 +6,12 @@ whether they came off real hardware or the simulator.
 Timestamps are integer microseconds since the Unix epoch, which is exactly what
 LLRP FirstSeenTimestampUTC carries. Keeping them as integers means no float
 rounding creeps into a race result.
+
+Read times are reported in the reader's clock domain and are never adjusted.
+The gun time is taken from the Pi's clock, and those two clocks have no
+relationship at all, so a reader exposes clock_offset_micros: the difference
+between them. The gun time is moved into the reader's domain once, when it is
+recorded. Individual reads are left exactly as the reader stamped them.
 """
 
 from __future__ import annotations
@@ -13,6 +19,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 from dataclasses import dataclass
 from typing import Iterable, Iterator
 
@@ -49,6 +56,11 @@ def normalize_epc(value) -> str:
     return str(value).strip().replace(" ", "").replace("-", "").upper()
 
 
+def pi_now_micros() -> int:
+    """The Pi's own clock, in the same units the reader reports."""
+    return int(time.time() * 1_000_000)
+
+
 class Reader:
     """A source of tag reads.
 
@@ -61,6 +73,16 @@ class Reader:
 
     def stop(self) -> None:
         raise NotImplementedError
+
+    @property
+    def clock_offset_micros(self) -> int | None:
+        """Reader clock minus Pi clock, in microseconds.
+
+        Positive means the reader is ahead of the Pi. None means it has not
+        been measured yet, and a gun time must not be recorded until it has:
+        without it there is nothing to convert the gun time with.
+        """
+        return None
 
 
 def _scalar(value):
@@ -141,6 +163,8 @@ class LLRPReader(Reader):
         self._stopped = threading.Event()
         self._client = None
         self._dropped = 0
+        self._clock_offset_micros: int | None = None
+        self._clock_offset_source: str | None = None
 
     def _build_config(self):
         from sllurp.llrp import LLRPReaderConfig
@@ -176,12 +200,72 @@ class LLRPReader(Reader):
             }
         )
 
+    # ------------------------------------------------------------------
+    # clock offset
+    # ------------------------------------------------------------------
+
+    @property
+    def clock_offset_micros(self) -> int | None:
+        """Reader clock minus Pi clock. None until it has been measured."""
+        return self._clock_offset_micros
+
+    @property
+    def clock_offset_source(self) -> str | None:
+        """Which measurement produced the offset: 'event' or 'first_report'."""
+        return self._clock_offset_source
+
+    def _on_event_notification(self, _client, event_data) -> None:
+        """Preferred measurement: the UTCTimestamp on a reader event.
+
+        The reader sends a ReaderEventNotification when the connection is
+        established, and sllurp hands the decoded ReaderEventNotificationData
+        straight over. UTCTimestamp is optional in LLRP, and a reader may send
+        Uptime instead, so this is allowed to come up empty.
+
+        The first measurement is kept rather than being replaced by later
+        events. The gun time is converted with this number and a value that
+        drifts under it would be worse than one that is merely slightly stale.
+        """
+        if self._clock_offset_micros is not None and self._clock_offset_source == "event":
+            return
+        stamp = (event_data or {}).get("UTCTimestamp")
+        micros = stamp.get("Microseconds") if isinstance(stamp, dict) else None
+        if micros is None:
+            return
+        self._clock_offset_micros = int(micros) - pi_now_micros()
+        self._clock_offset_source = "event"
+        logger.info(
+            "reader clock offset %+.3f s, measured from the connection event",
+            self._clock_offset_micros / 1_000_000,
+        )
+
+    def _measure_offset_from_report(self, read: TagRead) -> None:
+        """Fallback: the first read's own timestamp against the Pi's clock.
+
+        This number carries the transport and processing latency between the
+        reader stamping the read and this process handling it, on the order of
+        tens of milliseconds. That is fine for what it is used for, which is
+        shifting the gun time and comparing it against a threshold measured in
+        seconds. It is emphatically not fine for adjusting individual read
+        timestamps, and nothing does that: read times stay exactly as the
+        reader reported them.
+        """
+        self._clock_offset_micros = read.first_seen_utc - pi_now_micros()
+        self._clock_offset_source = "first_report"
+        logger.info(
+            "reader clock offset %+.3f s, measured from the first tag report; "
+            "this one carries transport latency",
+            self._clock_offset_micros / 1_000_000,
+        )
+
     def _on_tag_report(self, _client, tags) -> None:
         for tag in tags:
             read = tag_report_to_read(tag)
             if read is None:
                 self._dropped += 1
                 continue
+            if self._clock_offset_micros is None:
+                self._measure_offset_from_report(read)
             self._queue.put(read)
 
     def connect(self) -> None:
@@ -194,8 +278,16 @@ class LLRPReader(Reader):
             self.host, self.port, self._build_config(), timeout=self.connect_timeout
         )
         self._client.add_tag_report_callback(self._on_tag_report)
+        # Registered before connect so the notification the reader sends on
+        # connection is not missed.
+        self._client.add_event_callback(self._on_event_notification)
         self._client.connect()
         logger.info("reader connected")
+        if self._clock_offset_micros is None:
+            logger.warning(
+                "no UTCTimestamp in the connection event; the clock offset will "
+                "be measured from the first tag report instead"
+            )
 
     def reads(self) -> Iterator[TagRead]:
         if self._client is None:

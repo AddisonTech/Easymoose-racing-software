@@ -93,7 +93,7 @@ def test_raw_reads_are_kept_even_when_they_are_useless(race_db):
 def _one_finisher(race_db):
     race_db.add_participants(parse_participant_csv(HEADER + f"101,Ada,L,36,F,{TAG_A},\n"))
     race_db.append_reads(burst(TAG_A, START_PORT, 2.0) + burst(TAG_A, FINISH_PORT, 1500.0))
-    race_db.set_gun_time(GUN)
+    race_db.set_gun_time(GUN, 0)
 
 
 def test_recompute_writes_results_that_read_back(race_db):
@@ -116,7 +116,7 @@ def test_recompute_reflects_a_corrected_gun_time(race_db):
     _one_finisher(race_db)
     race_db.recompute()
     # The operator hit the button four seconds late and fixes the record.
-    race_db.set_gun_time(at(-4.0))
+    race_db.set_gun_time(at(-4.0), 0)
     assert race_db.recompute()[0].elapsed_seconds == 1498.0
 
 
@@ -147,7 +147,7 @@ def test_finishers_come_first_and_exceptions_follow(race_db):
     )
     race_db.append_reads(burst(TAG_A, START_PORT, 2.0) + burst(TAG_A, FINISH_PORT, 1500.0))
     race_db.append_reads(burst(TAG_B, START_PORT, 2.0))  # never finishes
-    race_db.set_gun_time(GUN)
+    race_db.set_gun_time(GUN, 0)
 
     path = race_db.export_csv(race_db.recompute())
     with open(path, newline="", encoding="utf-8") as handle:
@@ -171,7 +171,7 @@ def test_an_export_taken_mid_race_holds_what_was_known_then(race_db):
     race_db.add_participants(
         parse_participant_csv(HEADER + f"101,Ada,L,36,F,{TAG_A},\n102,Alan,T,41,M,{TAG_B},\n")
     )
-    race_db.set_gun_time(GUN)
+    race_db.set_gun_time(GUN, 0)
     race_db.append_reads(burst(TAG_A, START_PORT, 2.0) + burst(TAG_B, START_PORT, 2.0))
     race_db.append_reads(burst(TAG_A, FINISH_PORT, 1500.0))
     mid = race_db.export_csv(race_db.recompute())

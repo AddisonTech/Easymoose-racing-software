@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import re
 import sqlite3
 import threading
@@ -34,6 +35,8 @@ from timing import (
     format_elapsed,
     places,
 )
+
+logger = logging.getLogger(__name__)
 
 RACES_ROOT = Path("races")
 
@@ -53,6 +56,7 @@ CREATE TABLE IF NOT EXISTS races (
     date TEXT NOT NULL,
     distance TEXT,
     gun_time_utc INTEGER,
+    gun_time_reader_utc INTEGER,
     status TEXT NOT NULL DEFAULT 'setup',
     min_elapsed_seconds REAL NOT NULL DEFAULT 720
 );
@@ -125,6 +129,7 @@ class RaceInfo:
     date: str
     distance: str
     gun_time_utc: int | None
+    gun_time_reader_utc: int | None
     status: str
     min_elapsed_seconds: float
     directory: Path
@@ -132,6 +137,20 @@ class RaceInfo:
     @property
     def slug(self) -> str:
         return self.directory.name
+
+    @property
+    def effective_gun_time_utc(self) -> int | None:
+        """The gun time to compare reads against, in the reader's clock domain.
+
+        Races timed before the clock domains were separated have no
+        gun_time_reader_utc. Their reads and their gun time were compared
+        directly at the time, so the Pi domain value is the one that
+        reproduces the results they were given, and it is what recompute must
+        keep using for them.
+        """
+        if self.gun_time_reader_utc is not None:
+            return self.gun_time_reader_utc
+        return self.gun_time_utc
 
 
 def slugify(text: str) -> str:
@@ -290,7 +309,22 @@ class RaceDB:
         if not db.path.exists():
             raise FileNotFoundError(f"no race database in {directory}")
         db.connection.executescript(SCHEMA)  # harmless, and upgrades old files
+        db._migrate()
         return db
+
+    def _migrate(self) -> None:
+        """Bring an older race.db up to the current schema.
+
+        CREATE TABLE IF NOT EXISTS does nothing to a table that already exists,
+        so a column added after a race was timed has to be added by hand. The
+        value is left null; effective_gun_time_utc decides what a null means.
+        """
+        conn = self.connection
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(races)")}
+        if "gun_time_reader_utc" not in columns:
+            logger.info("adding gun_time_reader_utc to %s", self.path)
+            conn.execute("ALTER TABLE races ADD COLUMN gun_time_reader_utc INTEGER")
+            conn.commit()
 
     # ------------------------------------------------------------------
     # race record
@@ -298,8 +332,8 @@ class RaceDB:
 
     def info(self) -> RaceInfo:
         row = self.connection.execute(
-            "SELECT name, date, distance, gun_time_utc, status, min_elapsed_seconds"
-            " FROM races WHERE id = ?",
+            "SELECT name, date, distance, gun_time_utc, gun_time_reader_utc, status,"
+            " min_elapsed_seconds FROM races WHERE id = ?",
             (RACE_ID,),
         ).fetchone()
         return RaceInfo(
@@ -307,16 +341,30 @@ class RaceDB:
             date=row["date"],
             distance=row["distance"] or "",
             gun_time_utc=row["gun_time_utc"],
+            gun_time_reader_utc=row["gun_time_reader_utc"],
             status=row["status"],
             min_elapsed_seconds=row["min_elapsed_seconds"],
             directory=self.directory,
         )
 
-    def set_gun_time(self, gun_time_utc: int) -> None:
+    def set_gun_time(self, gun_time_utc: int, reader_offset_micros: int) -> None:
+        """Record the gun in both clock domains.
+
+        gun_time_utc is what the Pi's clock said when the operator confirmed
+        START, kept because it is the honest record of when the button was
+        pressed. gun_time_reader_utc is that instant expressed in the reader's
+        clock, and it is the one every timing rule compares reads against.
+        """
         with self._write_lock:
             self.connection.execute(
-                "UPDATE races SET gun_time_utc = ?, status = ? WHERE id = ?",
-                (int(gun_time_utc), STATUS_RUNNING, RACE_ID),
+                "UPDATE races SET gun_time_utc = ?, gun_time_reader_utc = ?, status = ?"
+                " WHERE id = ?",
+                (
+                    int(gun_time_utc),
+                    int(gun_time_utc) + int(reader_offset_micros),
+                    STATUS_RUNNING,
+                    RACE_ID,
+                ),
             )
             self.connection.commit()
 
@@ -512,7 +560,7 @@ class RaceDB:
         results = compute_results(
             self.reads(),
             self.participants(),
-            info.gun_time_utc,
+            info.effective_gun_time_utc,
             info.min_elapsed_seconds,
         )
         self.save_results(results)

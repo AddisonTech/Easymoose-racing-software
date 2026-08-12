@@ -60,6 +60,16 @@ PERSIST_INTERVAL = 10.0
 FLUSH_INTERVAL = 0.25
 FLUSH_SIZE = 200
 
+# Past this much difference between the reader's clock and the Pi's, the
+# operator gets a warning on screen. The software corrects for the offset
+# whatever its size, but a gap this wide means something is wrong with the
+# setup and is worth fixing before the race rather than trusting the maths.
+CLOCK_WARNING_SECONDS = 2.0
+
+
+class ClockOffsetUnknown(RuntimeError):
+    """The reader has not yet said what its clock reads."""
+
 
 def now_utc() -> int:
     return int(time.time() * MICROS)
@@ -145,7 +155,7 @@ class LiveSession:
         results = compute_results(
             reads,
             self.race.participants(),
-            info.gun_time_utc,
+            info.effective_gun_time_utc,
             info.min_elapsed_seconds,
         )
         with self._lock:
@@ -156,8 +166,21 @@ class LiveSession:
     # ------------------------------------------------------------------
 
     def fire_gun(self) -> int:
+        """Record the gun in both clock domains.
+
+        Raises ClockOffsetUnknown if the reader has not told us what its clock
+        says yet. Recording a Pi domain gun time and comparing reader stamped
+        reads against it is the one failure that silently ruins every result in
+        the race, so it is refused outright.
+        """
+        offset = self.reader.clock_offset_micros
+        if offset is None:
+            raise ClockOffsetUnknown(
+                "the reader clock offset has not been measured yet; present a tag "
+                "to an antenna and try again"
+            )
         gun = now_utc()
-        self.race.set_gun_time(gun)
+        self.race.set_gun_time(gun, offset)
         # The simulator needs to know; a real reader is already running and
         # does not care when the operator pressed the button.
         trigger = getattr(self.reader, "trigger_start", None)
@@ -189,7 +212,8 @@ class Console:
     """Application state: the races on disk plus at most one live session."""
 
     def __init__(self, root: Path, simulate: bool, reader_host: str, reader_port: int,
-                 tx_power_dbm: float, sim_speed: float, sim_seed: int):
+                 tx_power_dbm: float, sim_speed: float, sim_seed: int,
+                 sim_clock_skew: float = 0.0):
         self.root = Path(root)
         self.simulate = simulate
         self.reader_host = reader_host
@@ -197,6 +221,7 @@ class Console:
         self.tx_power_dbm = tx_power_dbm
         self.sim_speed = sim_speed
         self.sim_seed = sim_seed
+        self.sim_clock_skew = sim_clock_skew
         self.session: LiveSession | None = None
         self._lock = threading.Lock()
 
@@ -217,7 +242,12 @@ class Console:
             )
             if not people:
                 raise ValueError("import participants before starting simulate mode")
-            return SimulatedReader(people, seed=self.sim_seed, speed=self.sim_speed)
+            return SimulatedReader(
+                people,
+                seed=self.sim_seed,
+                speed=self.sim_speed,
+                clock_skew_seconds=self.sim_clock_skew,
+            )
         return LLRPReader(
             host=self.reader_host,
             port=self.reader_port,
@@ -266,11 +296,13 @@ def build_state(race: RaceDB, session: LiveSession | None) -> dict:
 
     if session is not None:
         results, read_count, last_read_utc, error = session.snapshot()
+        clock_offset = session.reader.clock_offset_micros
     else:
         results = race.results()
         read_count = race.read_count()
         last_read_utc = race.last_read_utc()
         error = None
+        clock_offset = None
 
     details = race.participant_details()
     place_by_participant = places(results)
@@ -334,6 +366,7 @@ def build_state(race: RaceDB, session: LiveSession | None) -> dict:
             "distance": info.distance,
             "status": info.status,
             "gun_time_utc": info.gun_time_utc,
+            "gun_time_reader_utc": info.gun_time_reader_utc,
             "min_elapsed_seconds": info.min_elapsed_seconds,
         },
         "live": session is not None,
@@ -342,6 +375,16 @@ def build_state(race: RaceDB, session: LiveSession | None) -> dict:
             "read_count": read_count,
             "last_read_utc": last_read_utc,
             "error": error,
+            "clock_offset_seconds": (
+                None if clock_offset is None else round(clock_offset / MICROS, 3)
+            ),
+            "clock_offset_source": (
+                getattr(session.reader, "clock_offset_source", None) if session else None
+            ),
+            "clock_warning": (
+                clock_offset is not None
+                and abs(clock_offset) > CLOCK_WARNING_SECONDS * MICROS
+            ),
         },
         "summary": summarize(results) if results else {
             "registered": len(details),
@@ -445,10 +488,19 @@ def create_app(console: Console) -> Flask:
     def fire_gun(slug):
         session = console.session_for(slug)
         if session is None:
-            return jsonify({"ok": False, "error": "the reader is not attached to this race"}), 409
+            # No reader means no clock offset, and a gun time recorded in the
+            # Pi's domain would quietly ruin every start in the race.
+            return jsonify({
+                "ok": False,
+                "error": "attach the reader before starting: without it there is no "
+                         "clock offset to record the gun time against",
+            }), 409
         if session.race.info().gun_time_utc is not None:
             return jsonify({"ok": False, "error": "the gun has already been fired"}), 409
-        gun = session.fire_gun()
+        try:
+            gun = session.fire_gun()
+        except ClockOffsetUnknown as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 409
         return jsonify({"ok": True, "gun_time_utc": gun})
 
     @app.get("/api/races/<slug>/state")
@@ -498,6 +550,9 @@ def parse_args(argv=None):
     parser.add_argument("--sim-speed", type=float, default=60.0,
                         help="simulate mode playback speed multiplier")
     parser.add_argument("--sim-seed", type=int, default=1)
+    parser.add_argument("--sim-clock-skew", type=float, default=0.0,
+                        help="seconds the simulated reader's clock runs ahead of the Pi, "
+                             "for exercising the clock offset correction")
     parser.add_argument("--debug", action="store_true")
     return parser.parse_args(argv)
 
@@ -520,6 +575,7 @@ def main(argv=None) -> None:
         tx_power_dbm=args.tx_power,
         sim_speed=args.sim_speed,
         sim_seed=args.sim_seed,
+        sim_clock_skew=args.sim_clock_skew,
     )
     app = create_app(console)
 

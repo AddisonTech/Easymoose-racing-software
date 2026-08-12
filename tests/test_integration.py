@@ -124,7 +124,7 @@ def test_stray_finish_reads_never_become_results(sim_race):
 
 def test_live_results_match_a_recompute_from_the_read_log(loaded_race):
     race, people, sim = loaded_race
-    race.set_gun_time(GUN)
+    race.set_gun_time(GUN, 0)
 
     session = LiveSession(race, ReplayReader(sim.generate(GUN)), "replay")
     session.thread.join(timeout=60)
@@ -141,7 +141,7 @@ def test_live_results_match_a_recompute_from_the_read_log(loaded_race):
 
 def test_a_session_restarted_mid_race_keeps_the_reads_already_on_disk(loaded_race):
     race, people, sim = loaded_race
-    race.set_gun_time(GUN)
+    race.set_gun_time(GUN, 0)
     all_reads = sim.generate(GUN)
     half = len(all_reads) // 2
 
