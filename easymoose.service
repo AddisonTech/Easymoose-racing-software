@@ -1,0 +1,32 @@
+# Run the race timing console at boot on the Pi.
+#
+#   sudo cp easymoose.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now easymoose
+#   journalctl -u easymoose -f
+#
+# Adjust User and WorkingDirectory if the checkout is not in /home/pi.
+# To run the demo without hardware, add --simulate to ExecStart.
+
+[Unit]
+Description=Easymoose race timing console
+Documentation=https://github.com/AddisonTech/Easymoose-racing-software
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/Easymoose-racing-software
+ExecStart=/home/pi/Easymoose-racing-software/run.sh --reader-host 192.168.1.50
+Restart=on-failure
+RestartSec=5
+# Race data is the whole point of the machine; never let a crash loop take it.
+KillSignal=SIGINT
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
