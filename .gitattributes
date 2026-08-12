@@ -1,0 +1,4 @@
+# The Pi runs these directly. A CRLF here means bash fails with a confusing
+# "\r: command not found" on race morning.
+*.sh text eol=lf
+*.service text eol=lf
