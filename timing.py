@@ -10,8 +10,9 @@ The rules, in the order they are applied:
 
   start        The first read of any of the participant's EPCs on a start
                antenna at or after the gun. Reads before the gun are logged but
-               ignored, because the field stands on the mat for several minutes
-               beforehand. Someone already on the mat when the gun fires gets a
+               ignored, because the field stands in the start read zone for
+               several minutes beforehand. Someone already in the zone when the
+               gun fires gets a
                start of essentially the gun time, which is what we want.
 
   finish       The first crossing of the finish line at least
@@ -27,7 +28,7 @@ The rules, in the order they are applied:
                valid crossing wins.
 
 Note the deliberate asymmetry between the two lines. The gun cutoff is applied
-to raw reads before bursts are formed, because a runner standing on the mat is
+to raw reads before bursts are formed, because a runner standing in the zone is
 mid burst when the gun fires and we still want to time them. The minimum
 elapsed cutoff is applied to formed crossings, because there the whole point is
 to reject a person loitering by the arch; if their burst straddled the cutoff,

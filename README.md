@@ -18,7 +18,7 @@ tested with no hardware attached.
               +---------- PoE switch --------------+
                           (Ethernet)
 
-    Reader port 1  ----  START line, antenna A   \  both cover the same mat, so
+    Reader port 1  ----  START line, antenna A   \  both cover the same line, so
     Reader port 2  ----  START line, antenna B   /  one crossing reads on both
 
     Reader port 3  ----  FINISH line, antenna A  \  same again at the finish
@@ -59,8 +59,8 @@ Other reader options, all with sensible defaults:
     --tx-power 30          transmit power in dBm
 
 Transmit power, session and search mode are starting points in `reader.py`,
-not validated numbers. Tune them against real mats, real tags and a real
-field before trusting them at an event.
+not validated numbers. Tune them against the real antennas, real tags and a
+real field before trusting them at an event.
 
 ## Simulate mode
 
@@ -68,11 +68,11 @@ No reader, no antennas, no tags:
 
     ./run.sh --simulate
 
-The simulator generates a full 5K: runners milling on the start mat before
-the gun, a mass start with the back of the pack crossing late, dozens of reads
-per crossing, dropped reads, the occasional tag that never wakes up, stray
-reads from people loitering by the finish arch, a couple of DNFs and someone
-whose start is missed. Playback is compressed 60x by default, so a 28 minute
+The simulator generates a full 5K: runners milling in the start line read zone
+before the gun, a mass start with the back of the pack crossing late, dozens
+of reads per crossing, dropped reads, the occasional tag that never wakes up,
+stray reads from people loitering by the finish arch, a couple of DNFs and
+someone whose start is missed. Playback is compressed 60x by default, so a 28 minute
 race takes about half a minute, but the timestamps on the reads are real race
 times and the results come out as a real 5K.
 
@@ -89,14 +89,14 @@ know who is running.
    shows the field you expect.
 2. **On site.** Cable the antennas, confirm the mapping above, and open the
    race from the archive. Press **Attach reader**. The reader line under the
-   clock should start counting reads as tags come near the mats.
-3. **Spot check.** Walk a tag over each mat and watch the read count move.
-   The participants tab, filtered to runners not yet read, is the fastest way
-   to catch a bib that was never assigned a tag.
+   clock should start counting reads as tags come into the read zones.
+3. **Spot check.** Walk a tag through each read zone and watch the read count
+   move. The participants tab, filtered to runners not yet read, is the
+   fastest way to catch a bib that was never assigned a tag.
 4. **Start.** Press **START RACE**, then **CONFIRM START** within five
    seconds. That records the gun time. Reads taken before the gun stay in the
    log but are ignored by the rules, so it does not matter that the field has
-   been standing on the mat for ten minutes.
+   been standing in the start read zone for ten minutes.
 5. **During.** The live results view lists finishers newest first. Press
    **EXPORT CSV** whenever anyone wants standings; it writes a timestamped
    file and never interrupts the reads.
@@ -106,7 +106,7 @@ know who is running.
 
 The console binds to `0.0.0.0`, so a laptop or phone on the same network can
 open it at the address `run.sh` prints. Useful for putting results on a screen
-at the finish while the Pi stays in a case by the mats.
+at the finish while the Pi stays in a case by the antennas.
 
 ## The timing rules
 

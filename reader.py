@@ -116,7 +116,7 @@ class LLRPReader(Reader):
 
     The RF settings below are starting points. They have not been validated
     against hardware, because the hardware does not exist yet; expect to tune
-    tx_power_dbm, session and search mode against real mats and real tags.
+    tx_power_dbm, session and search mode against the real antennas and tags.
     """
 
     def __init__(

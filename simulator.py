@@ -3,7 +3,7 @@
 This is the test harness for the whole system. Every timing rule in timing.py
 is exercised by something this module deliberately generates:
 
-  - runners standing on the start mat for minutes before the gun
+  - runners standing in the start line read zone for minutes before the gun
   - a mass start where the back of the pack crosses the line well after the gun
   - dozens of reads per crossing rather than one clean read
   - individual reads dropped, and occasionally a whole tag failing to read
@@ -148,7 +148,7 @@ class SimulatedReader(Reader):
         order = list(self.participants)
         rng.shuffle(order)
 
-        # Whoever lines up at the back takes longer to reach the mat. This is
+        # Whoever lines up at the back takes longer to reach the line. This is
         # the whole reason net time exists, so it needs to be visible in the
         # generated data.
         per_person_delay = 0.18
@@ -192,7 +192,7 @@ class SimulatedReader(Reader):
         self._race.sort(key=lambda item: item[2])
 
     def _build_milling(self, plan: _RunnerPlan, rng: random.Random) -> None:
-        """Runners drift on and off the start mat while they wait for the gun.
+        """Runners drift in and out of the start line read zone before the gun.
 
         These reads are real and get logged, but timing must ignore them.
         """
@@ -259,7 +259,7 @@ class SimulatedReader(Reader):
                     continue
                 position = rng.random()
                 offset = crossing_offset + position * dwell
-                # Signal is strongest as the runner passes over the mat.
+                # Signal is strongest as the runner passes the antenna.
                 rssi = -72.0 + 22.0 * math.sin(math.pi * position) + rng.uniform(-3.0, 3.0)
                 sink.append((epc, rng.choice(list(ports)), offset, round(rssi, 1)))
 
