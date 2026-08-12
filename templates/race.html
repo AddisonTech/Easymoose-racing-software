@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ race.name }} — Easymoose</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body data-slug="{{ slug }}" data-live="{{ 'yes' if live else 'no' }}">
+<header class="bar">
+  <h1><a href="{{ url_for('index') }}" class="back">&larr;</a> {{ race.name }}</h1>
+  <span class="sub">{{ race.date }}{% if race.distance %} &middot; {{ race.distance }}{% endif %}</span>
+  <span class="mode {{ 'sim' if mode == 'simulate' else '' }}">
+    {% if mode == 'simulate' %}SIMULATE{% else %}reader{% endif %}
+  </span>
+</header>
+
+<div id="flash" class="notice" hidden></div>
+
+<section class="console">
+  <div class="clock-box">
+    <div class="label">Time since gun</div>
+    <div id="clock" class="clock">--:--:--</div>
+    <div id="reader-line" class="label">reader not attached</div>
+  </div>
+
+  <div class="counts">
+    <div class="count"><span id="c-registered">0</span><label>registered</label></div>
+    <div class="count"><span id="c-started">0</span><label>started</label></div>
+    <div class="count"><span id="c-finished">0</span><label>finished</label></div>
+    <div class="count"><span id="c-course">0</span><label>on course</label></div>
+    <div class="count warn"><span id="c-review">0</span><label>review</label></div>
+  </div>
+
+  <div class="controls">
+    {% if live %}
+      <button id="start" class="huge go">START RACE</button>
+      <form method="post" action="{{ url_for('stop_live', slug=slug) }}" class="inline">
+        <button class="danger">Stop reader</button>
+      </form>
+    {% elif other_race_live %}
+      <p class="notice">
+        The reader is attached to <a href="{{ url_for('race_console', slug=live_slug) }}">{{ live_slug }}</a>.
+        Stop that race before starting this one.
+      </p>
+    {% else %}
+      <form method="post" action="{{ url_for('go_live', slug=slug) }}" class="inline">
+        <button class="primary">Attach reader</button>
+      </form>
+      <form method="post" action="{{ url_for('recompute', slug=slug) }}" class="inline">
+        <button>Recompute from reads</button>
+      </form>
+    {% endif %}
+    <button id="export" class="export">EXPORT CSV</button>
+  </div>
+</section>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="results">Live results</button>
+  <button class="tab" data-tab="participants">Participants</button>
+  <button class="tab" data-tab="setup">Setup</button>
+</nav>
+
+<main>
+  <section id="tab-results" class="tab-panel">
+    <table class="results">
+      <thead>
+        <tr><th class="num">Place</th><th class="num">Bib</th><th>Name</th><th class="num">Elapsed</th></tr>
+      </thead>
+      <tbody id="finishers">
+        <tr class="empty-row"><td colspan="4">No finishers yet.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="tab-participants" class="tab-panel" hidden>
+    <label class="filter">
+      <input type="checkbox" id="only-unread"> show only runners not yet read at the start
+    </label>
+    <table class="results">
+      <thead>
+        <tr><th class="num">Bib</th><th>Name</th><th class="num">Age</th><th>Gender</th>
+            <th>Status</th><th class="num">Elapsed</th></tr>
+      </thead>
+      <tbody id="participants">
+        <tr class="empty-row"><td colspan="6">No participants imported.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="tab-setup" class="tab-panel" hidden>
+    <div class="panel">
+      <h2>Import participants</h2>
+      <p class="label">CSV columns: bib, first_name, last_name, age, gender, epc1, epc2</p>
+      <form method="post" action="{{ url_for('import_participants', slug=slug) }}"
+            enctype="multipart/form-data" class="inline">
+        <input type="file" name="file" accept=".csv,text/csv" required>
+        <button class="primary">Import</button>
+      </form>
+    </div>
+    <div class="panel">
+      <h2>Race settings</h2>
+      <table class="plain">
+        <tr><th>Minimum elapsed</th><td>{{ race.min_elapsed_seconds }} seconds</td></tr>
+        <tr><th>Gun time</th><td>{{ race.gun_time_utc or 'not started' }}</td></tr>
+        <tr><th>Status</th><td>{{ race.status }}</td></tr>
+        <tr><th>Folder</th><td><code>{{ race.directory }}</code></td></tr>
+      </table>
+    </div>
+    <div class="panel">
+      <h2>Exports</h2>
+      <ul id="exports" class="exports"><li class="label">none yet</li></ul>
+    </div>
+  </section>
+</main>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

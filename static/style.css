@@ -1,0 +1,201 @@
+/* One stylesheet, no framework, no web fonts. Everything here has to be
+   readable outdoors on a laptop in daylight and on a phone held at arm's
+   length, so the type is large and the contrast is high. */
+
+:root {
+  --bg: #12151a;
+  --panel: #1b2029;
+  --line: #2b323e;
+  --text: #e9edf3;
+  --dim: #8d97a6;
+  --go: #1f9d4d;
+  --danger: #b23b3b;
+  --accent: #3c7fd4;
+  --warn: #c98a12;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+a { color: var(--accent); }
+
+.bar {
+  display: flex;
+  align-items: baseline;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  padding: 0.8rem 1.1rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.bar h1 { font-size: 1.25rem; margin: 0; }
+.bar .sub { color: var(--dim); }
+.back { text-decoration: none; margin-right: 0.3rem; }
+
+.mode {
+  margin-left: auto;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--dim);
+}
+.mode.sim { color: #ffd479; border-color: #6b551c; }
+
+main { padding: 1.1rem; max-width: 1100px; margin: 0 auto; }
+
+/* ---------------------------------------------------------------- console */
+
+.console {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.2rem;
+  align-items: center;
+  padding: 1.1rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.clock-box { min-width: 15rem; }
+.clock {
+  font-size: 3.4rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 1;
+}
+.label { color: var(--dim); font-size: 0.85rem; }
+
+.counts { display: flex; gap: 1.4rem; flex-wrap: wrap; }
+.count { text-align: center; }
+.count span { display: block; font-size: 1.9rem; font-variant-numeric: tabular-nums; }
+.count label { color: var(--dim); font-size: 0.78rem; text-transform: uppercase; }
+.count.warn span { color: var(--warn); }
+
+.controls { margin-left: auto; display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+.inline { display: inline; margin: 0; }
+
+button, .button {
+  font: inherit;
+  padding: 0.55rem 1rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #232a35;
+  color: var(--text);
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+}
+button:hover, .button:hover { border-color: #47526333; background: #2a323f; }
+button:disabled { opacity: 0.55; cursor: default; }
+
+button.primary { background: var(--accent); border-color: var(--accent); }
+button.danger { background: var(--danger); border-color: var(--danger); }
+button.export { background: #2f3a49; border-color: #3f4b5c; font-weight: 600; }
+
+button.huge {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 0.85rem 1.6rem;
+}
+button.go { background: var(--go); border-color: var(--go); }
+button.confirm { background: var(--danger); border-color: #e06666; animation: pulse 0.9s infinite; }
+
+@keyframes pulse { 50% { opacity: 0.65; } }
+
+/* ------------------------------------------------------------------ tabs */
+
+.tabs {
+  display: flex;
+  gap: 0.3rem;
+  padding: 0 1.1rem;
+  max-width: 1100px;
+  margin: 0 auto;
+  border-bottom: 1px solid var(--line);
+}
+.tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; color: var(--dim); }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+/* ---------------------------------------------------------------- panels */
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1rem 1.1rem;
+  margin-bottom: 1.1rem;
+}
+.panel h2 { margin: 0 0 0.8rem; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); }
+
+.grid { display: flex; flex-wrap: wrap; gap: 0.9rem; align-items: flex-end; }
+.grid label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: var(--dim); }
+.grid small { color: var(--dim); font-size: 0.75rem; }
+
+input[type=text], input[type=date], input[type=number], input:not([type]) {
+  font: inherit;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #12161d;
+  color: var(--text);
+}
+input[type=file] { color: var(--dim); }
+
+.filter { display: block; color: var(--dim); margin-bottom: 0.7rem; font-size: 0.9rem; }
+
+/* ---------------------------------------------------------------- tables */
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--line); }
+th { color: var(--dim); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.time { font-variant-numeric: tabular-nums; }
+.results .place { font-weight: 700; }
+.results td { font-size: 1.05rem; }
+.empty-row td, .empty { color: var(--dim); }
+.plain th { width: 12rem; }
+
+tr.fresh { animation: highlight 2.5s ease-out; }
+@keyframes highlight { from { background: #1f9d4d55; } to { background: transparent; } }
+
+.pill {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+}
+.pill.finished { color: #7fd6a0; border-color: #2c6b45; }
+.pill.dnf { color: #e59595; border-color: #6b2c2c; }
+.pill.review { color: #ffd479; border-color: #6b551c; }
+.pill.running { color: #7fd6a0; border-color: #2c6b45; }
+
+.notice {
+  margin: 0.9rem 1.1rem;
+  padding: 0.6rem 0.9rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.notice.good { border-color: #2c6b45; }
+.notice.bad { border-color: #6b2c2c; }
+
+.exports { list-style: none; padding: 0; margin: 0; }
+.exports li { padding: 0.2rem 0; }
+
+@media (max-width: 640px) {
+  .clock { font-size: 2.6rem; }
+  .controls { margin-left: 0; width: 100%; }
+  .count span { font-size: 1.5rem; }
+}

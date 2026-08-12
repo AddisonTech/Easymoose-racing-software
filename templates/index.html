@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Easymoose race timing</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="bar">
+  <h1>Easymoose race timing</h1>
+  <span class="mode {{ 'sim' if mode == 'simulate' else '' }}">
+    {% if mode == 'simulate' %}SIMULATE, no hardware{% else %}reader {{ reader_host }}{% endif %}
+  </span>
+</header>
+
+<main>
+  {% if live_slug %}
+  <p class="notice">
+    A race is live right now:
+    <a href="{{ url_for('race_console', slug=live_slug) }}">{{ live_slug }}</a>
+  </p>
+  {% endif %}
+
+  <section class="panel">
+    <h2>New race</h2>
+    <form method="post" action="{{ url_for('create_race') }}" class="grid">
+      <label>Name
+        <input name="name" required placeholder="Turkey Trot">
+      </label>
+      <label>Date
+        <input name="date" type="date" required>
+      </label>
+      <label>Distance
+        <input name="distance" placeholder="5K">
+      </label>
+      <label>Minimum elapsed (seconds)
+        <input name="min_elapsed_seconds" type="number" min="0" step="1" value="720">
+        <small>Finish reads before this are ignored. 720 suits a 5K.</small>
+      </label>
+      <button type="submit" class="primary">Create race</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Past races</h2>
+    {% if races %}
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Race</th><th>Distance</th><th>Status</th>
+            <th class="num">Registered</th><th class="num">Finishers</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for race in races %}
+        <tr>
+          <td>{{ race.date }}</td>
+          <td>{{ race.name }}</td>
+          <td>{{ race.distance }}</td>
+          <td><span class="pill {{ race.status }}">{{ race.status }}</span></td>
+          <td class="num">{{ race.registered }}</td>
+          <td class="num">{{ race.finishers }}</td>
+          <td><a class="button" href="{{ url_for('race_console', slug=race.slug) }}">Open</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No races yet. Create one above.</p>
+    {% endif %}
+  </section>
+</main>
+</body>
+</html>
