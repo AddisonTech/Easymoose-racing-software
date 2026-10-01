@@ -5,3 +5,8 @@ __pycache__/
 # Race data stays on the Pi. Keep the directory, never the races in it.
 races/*
 !races/.gitkeep
+# Runner registrations, bib assignments and tag pairs. Real people's data; the
+# repo is public. Matched in either case so a Data or data folder is covered
+# whatever core.ignorecase says.
+[Dd][Aa][Tt][Aa]/
+pairs.csv
