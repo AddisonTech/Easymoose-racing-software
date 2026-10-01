@@ -153,6 +153,65 @@ times and the results come out as a real 5K.
 Import a participant CSV before starting simulate mode: the simulator needs to
 know who is running.
 
+## Pairing bibs
+
+Each bib has a tag stuck to it, and the participant CSV needs to know which
+EPC is on which bib. `pair.py` reads them off the reader one bib at a time.
+Run it with the race console stopped, since the reader takes one LLRP client
+at a time:
+
+    .venv/bin/python pair.py
+
+It shows the bib number in large type. Hold that bib over antenna 1. When
+exactly one tag is read, it rings the bell, writes `bib,epc1` to `pairs.csv`
+straight away, and moves to the next bib. Take the bib away before presenting
+the next one, because nothing is captured until the field has been quiet for
+a moment. Two tags in the field are rejected with `MORE THAN ONE TAG,
+rescan`, and a tag that is already paired shows `ALREADY BIB X`.
+
+    Enter   skip this bib
+    b       go back one bib and clear its pair
+    q       quit
+
+Quitting is safe at any point. Run it again and it carries on from the first
+bib not yet in `pairs.csv`.
+
+    --start 110 --end 310   bib range, defaults are this event's bibs
+    --power 10              dBm, for this session only
+    --min-rssi -45          ignore weaker reads while pairing
+    --host 192.168.10.20    reader IP
+    --out pairs.csv         pairs file
+    --simulate              no reader, generated tags
+
+Power and the RSSI floor were set against the R420 and DogBone tags. At 12
+dBm, a bib held over the antenna read at about -30 dBm, while a bib lying a
+few feet away read continuously at about -55. Turning the power down cannot
+keep that one out, because 10 dBm is the reader's lowest setting. The RSSI
+floor does. If bibs on the table still cause rejections, move them further
+away before changing these numbers.
+
+To check the work, run verify mode and walk the bibs past the antenna:
+
+    .venv/bin/python pair.py --verify
+
+Every tag shows its bib number, or `UNKNOWN TAG` if it is not in `pairs.csv`,
+with a running count of bibs confirmed. When you quit, it lists the paired
+bibs it never saw.
+
+Then merge the registration list in. The registration CSV needs `bib`,
+`first_name`, `last_name`, `age` and `gender` columns. A registration export
+with headers like `First Name` works as it is, and any other columns are
+ignored:
+
+    .venv/bin/python merge.py registration.csv pairs.csv --out participants.csv
+
+`participants.csv` is the participant CSV the console imports. Every paired
+bib goes in, named or not, so spare bibs and day-of signups still get times.
+Registered bibs with no pair are left out and listed, because a bib without a
+tag cannot be timed.
+Registrations with no bib number yet are counted and flagged, because
+they cannot be matched to anything. Assign bibs in registration first.
+
 ## Running a real race
 
 1. **Before race day.** Start the console (`./run.sh --reader-host <ip>`),
@@ -243,10 +302,11 @@ the Pi.
 
     .venv/bin/python -m pytest
 
-76 tests, a few seconds. They cover the timing rules at their edges (pre-gun
+98 tests, a few seconds. They cover the timing rules at their edges (pre-gun
 reads ignored, burst collapsing, minimum elapsed rejection including a burst
 that straddles the cutoff, dual tag selection, DNF and review), the storage
-layer, the CSV import and export, and the web endpoints.
+layer, the CSV import and export, the web endpoints, EPC decoding from live
+reader reports, and bib pairing, verify and merge.
 
 Two of them matter more than the rest. One checks that live processing and a
 recompute from the read log produce identical results: what the operator reads
@@ -263,6 +323,8 @@ have.
     timing.py           the rules, pure functions over a read log
     db.py               per-race SQLite, CSV import and export, recompute
     app.py              Flask server, live session, the reader thread
+    pair.py             bib to EPC pairing and verify, off the reader
+    merge.py            registration plus pairs.csv into a participant CSV
     templates/          two pages: the archive and the race console
     static/             one stylesheet, one script, no CDN, no build step
     tests/              pytest
