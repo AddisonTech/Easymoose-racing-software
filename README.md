@@ -169,8 +169,9 @@ Put the registration export in `Data/`, then:
 Runners are sorted by last name, then first name, ignoring case, and numbered
 from 110. It writes two files and prints counts only, never names:
 
-    Data/registration_bibs.csv   bib,first_name,last_name,age,gender,event,tshirt
-    Data/pickup_sheet.html       printable pickup list, one blank row per spare bib
+    Data/registration_bibs.csv     bib,first_name,last_name,age,gender,event,tshirt,registration_id
+    Data/pickup_sheet.html         printable pickup list, one blank row per spare bib
+    Data/runsignup_bib_import.csv  Registration ID,Bib, for loading bibs back into registration
 
 The export itself is left untouched. Running it again keeps the bibs already
 assigned, because by then they may be printed and handed out, and only
@@ -329,7 +330,7 @@ the Pi.
 
     .venv/bin/python -m pytest
 
-107 tests, a few seconds. They cover the timing rules at their edges (pre-gun
+110 tests, a few seconds. They cover the timing rules at their edges (pre-gun
 reads ignored, burst collapsing, minimum elapsed rejection including a burst
 that straddles the cutoff, dual tag selection, DNF and review), the storage
 layer, the CSV import and export, the web endpoints, EPC decoding from live

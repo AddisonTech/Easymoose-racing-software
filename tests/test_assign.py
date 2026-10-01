@@ -12,6 +12,12 @@ import pytest
 from assign_bibs import AssignError, assign, main, pickup_sheet, read_export, read_roster
 from pair import bib_label, load_roster, resolve_roster
 
+@pytest.fixture(autouse=True)
+def run_in_a_temp_folder(tmp_path, monkeypatch):
+    """main() defaults to writing in Data/. Never let a test touch the real one."""
+    monkeypatch.chdir(tmp_path)
+
+
 EXPORT_HEADER = "Registration ID,First Name,Middle Name,Last Name,Bib,Gender,Age,T-Shirt,Event\n"
 
 
@@ -68,7 +74,7 @@ def test_an_export_with_spaced_headers_is_read_and_nameless_rows_counted(tmp_pat
     )
     runners, nameless = read_export(export)
     assert runners == [{"first_name": "Mira", "last_name": "Quill", "age": "34", "gender": "F",
-                        "event": "5K (Junior)", "tshirt": "S"}]
+                        "event": "5K (Junior)", "tshirt": "S", "registration_id": "9001"}]
     assert nameless == 1
 
 
@@ -82,7 +88,8 @@ def test_main_writes_the_roster_and_sheet_and_leaves_the_export_alone(tmp_path, 
     assert export.read_bytes() == before
     with roster.open(encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
-    assert list(rows[0]) == ["bib", "first_name", "last_name", "age", "gender", "event", "tshirt"]
+    assert list(rows[0]) == ["bib", "first_name", "last_name", "age", "gender", "event", "tshirt",
+                             "registration_id"]
     assert [(r["bib"], r["last_name"]) for r in rows] == [("110", "Amsel"), ("111", "Marsh"), ("112", "Zeller")]
 
     printed = capsys.readouterr().out
@@ -177,3 +184,47 @@ def test_the_roster_merges_into_201_importable_participants(tmp_path):
     assert sum(1 for row in imported if row["last_name"]) == 173
     assert imported[0]["bib"] == "110" and imported[-1]["bib"] == "310"
     assert imported[-1]["first_name"] == "" and imported[-1]["epcs"] == ["E28068940000000000000136"]
+
+
+def test_registration_ids_are_kept_and_exported_for_the_bib_import(tmp_path, capsys):
+    export = tmp_path / "export.csv"
+    write_export(export, [("Tova", "Zeller"), ("Ike", "Amsel"), ("Juno", "Marsh")])
+    assert main([str(export)]) == 0  # defaults, inside the temp folder
+    rows = read_roster(tmp_path / "Data" / "registration_bibs.csv")
+    assert [(r["bib"], r["last_name"], r["registration_id"]) for r in rows] == [
+        (110, "Amsel", "9001"), (111, "Marsh", "9002"), (112, "Zeller", "9000")]
+    lines = (tmp_path / "Data" / "runsignup_bib_import.csv").read_text(encoding="utf-8").splitlines()
+    assert lines == ["Registration ID,Bib", "9001,110", "9002,111", "9000,112"]
+    assert "Bib import: " in capsys.readouterr().out
+
+
+def test_an_older_roster_gets_ids_filled_in_without_moving_a_bib(tmp_path, capsys):
+    export = tmp_path / "export.csv"
+    write_export(export, [("Tova", "Zeller"), ("Ike", "Amsel"), ("Abe", "Aaron")])
+    roster = tmp_path / "Data" / "registration_bibs.csv"
+    roster.parent.mkdir()
+    # Written before IDs were recorded, and before Abe Aaron registered.
+    roster.write_text(
+        "bib,first_name,last_name,age,gender,event,tshirt\n"
+        "110,Ike,Amsel,30,F,5K (Adult),M\n"
+        "111,Tova,Zeller,30,F,5K (Adult),M\n",
+        encoding="utf-8",
+    )
+    assert main([str(export)]) == 0
+    rows = read_roster(roster)
+    assert [(r["bib"], r["last_name"], r["registration_id"]) for r in rows] == [
+        (110, "Amsel", "9001"), (111, "Zeller", "9000")]
+    printed = capsys.readouterr().out
+    assert "Filled in 2 registration IDs" in printed
+    assert "1 runners in the export have no bib yet" in printed
+
+
+def test_a_roster_row_missing_from_the_export_fills_nothing(tmp_path):
+    from assign_bibs import backfill_registration_ids
+
+    rows = [{"bib": 110, "registration_id": "", **runner("Ike", "Amsel")},
+            {"bib": 111, "registration_id": "", **runner("Gone", "Away")}]
+    runners = [{"registration_id": "9001", **runner("Ike", "Amsel")}]
+    with pytest.raises(AssignError, match="bib 111"):
+        backfill_registration_ids(rows, runners)
+    assert rows[0]["registration_id"] == ""
