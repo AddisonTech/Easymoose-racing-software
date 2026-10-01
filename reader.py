@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import string
 import threading
 import time
 from dataclasses import dataclass
@@ -47,12 +48,25 @@ class TagRead:
 def normalize_epc(value) -> str:
     """Put an EPC into the one form used everywhere: uppercase hex, no spaces.
 
-    Accepts raw bytes from the reader or text typed into a participant CSV.
+    Accepts bytes from the reader or text typed into a participant CSV.
+
+    sllurp hands the EPC over already hexlified, as ASCII bytes such as
+    b"e28011b0a5050076e8fe9942". Those are decoded, not hex encoded a second
+    time, or every live read would carry a 48 character EPC that matches
+    nothing in the participant list. Bytes that are not ASCII hex are taken
+    to be the raw EPC.
     """
     if value is None:
         return ""
     if isinstance(value, (bytes, bytearray)):
-        return bytes(value).hex().upper()
+        raw = bytes(value)
+        try:
+            text = raw.decode("ascii")
+        except UnicodeDecodeError:
+            return raw.hex().upper()
+        if text and all(ch in string.hexdigits for ch in text):
+            return text.upper()
+        return raw.hex().upper()
     return str(value).strip().replace(" ", "").replace("-", "").upper()
 
 
