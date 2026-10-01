@@ -3,9 +3,10 @@
 Pair mode walks through the bibs in order. Hold one bib over the antenna, the
 tool reads it, and when exactly one tag was seen it writes bib,epc1 to
 pairs.csv and moves on. Verify mode reads pairs.csv back and shows the bib for
-every tag that passes the antenna.
+every tag that passes the antenna. With a roster, each bib is shown with the
+runner's name.
 
-    python pair.py                       pair bibs 110 to 310 into pairs.csv
+    python pair.py                       pair bibs 110 to 310 into Data/pairs.csv
     python pair.py --start 250           pair from bib 250
     python pair.py --verify              check tags against pairs.csv
     python pair.py --simulate            no reader, generated tags
@@ -46,6 +47,12 @@ DEFAULT_MIN_RSSI = -45.0
 # The bibs printed for this event.
 FIRST_BIB = 110
 LAST_BIB = 310
+
+# Runner data lives in Data/, which git ignores. Paths are relative to where
+# the tool is run from, which is the repo root.
+DATA_DIR = Path("Data")
+DEFAULT_PAIRS = DATA_DIR / "pairs.csv"
+DEFAULT_ROSTER = DATA_DIR / "registration_bibs.csv"
 
 # How long to keep collecting after the first tag shows up. Long enough for a
 # second tag in the field to be read too, short enough not to slow anyone down.
@@ -116,6 +123,7 @@ class PairStore:
         return None
 
     def add(self, bib: int, epc: str) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         new_file = not self.path.exists() or self.path.stat().st_size == 0
         with self.path.open("a", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle, lineterminator="\n")
@@ -139,6 +147,36 @@ class PairStore:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp, self.path)
+
+
+def load_roster(path: Path) -> dict[int, str]:
+    """Read registration_bibs.csv into {bib: "First Last"} for the screen."""
+    roster: dict[int, str] = {}
+    with Path(path).open(newline="", encoding="utf-8-sig") as handle:
+        for row in csv.DictReader(handle):
+            row = {(key or "").strip().lower(): (value or "").strip()
+                   for key, value in row.items() if isinstance(value, str)}
+            if not row.get("bib", "").isdigit():
+                continue
+            name = f"{row.get('first_name', '')} {row.get('last_name', '')}".strip()
+            roster[int(row["bib"])] = name
+    return roster
+
+
+def resolve_roster(path: Path | None) -> dict[int, str] | None:
+    """The roster named on the command line, else the default one if it exists."""
+    if path is None:
+        if not DEFAULT_ROSTER.exists():
+            return None
+        path = DEFAULT_ROSTER
+    return load_roster(path)
+
+
+def bib_label(bib: int, roster: dict[int, str] | None) -> str:
+    """'Bib 110 - Jane Doe', 'Bib 290 - spare', or 'Bib 110' with no roster."""
+    if roster is None:
+        return f"Bib {bib}"
+    return f"Bib {bib} - {roster.get(bib) or 'spare'}"
 
 
 # ----------------------------------------------------------------------
@@ -533,7 +571,7 @@ def run_pair(args, reader: Reader) -> int:
                 redraw = True
                 if event.kind == "accepted":
                     bell()
-                    message, colour = f"BIB {event.bib} OK   {event.epc}", GREEN
+                    message, colour = f"{bib_label(event.bib, args.roster_names)} OK   {event.epc}", GREEN
                 elif event.kind == "multiple":
                     message, colour = "MORE THAN ONE TAG, rescan", RED
                 elif event.kind == "duplicate":
@@ -550,7 +588,7 @@ def run_pair(args, reader: Reader) -> int:
                     state = "take the tag away"
                 lines = [""]
                 lines += big_text(f"BIB {pairer.current}", width)
-                lines += ["", f"  Bib {pairer.current} - {state}", ""]
+                lines += ["", f"  {bib_label(pairer.current, args.roster_names)} - {state}", ""]
                 if message:
                     lines.append(f"  {colour} {message} {RESET}" if colour else f"  {message}")
                 lines += [
@@ -597,7 +635,7 @@ def run_verify(args, reader: Reader) -> int:
                     lines += ["  Pass a tag over the antenna.", ""]
                 elif last.kind == "confirmed":
                     lines += big_text(f"BIB {last.bib}", width)
-                    lines += ["", f"  {GREEN} BIB {last.bib} {RESET}  {last.epc}", ""]
+                    lines += ["", f"  {GREEN} {bib_label(last.bib, args.roster_names)} {RESET}  {last.epc}", ""]
                 else:
                     lines += ["", f"  {RED} UNKNOWN TAG {RESET}  {last.epc}", ""]
                 lines += [
@@ -659,7 +697,9 @@ def main(argv=None) -> int:
                         help="transmit power in dBm for this session")
     parser.add_argument("--start", type=int, default=FIRST_BIB, help="first bib")
     parser.add_argument("--end", type=int, default=LAST_BIB, help="last bib")
-    parser.add_argument("--out", type=Path, default=Path("pairs.csv"), help="pairs file")
+    parser.add_argument("--out", type=Path, default=DEFAULT_PAIRS, help="pairs file")
+    parser.add_argument("--roster", type=Path, default=None,
+                        help=f"bib,first_name,last_name CSV to show names; default {DEFAULT_ROSTER} if it exists")
     parser.add_argument("--verify", action="store_true", help="check tags against the pairs file")
     parser.add_argument("--simulate", action="store_true", help="no reader, generated tags")
     parser.add_argument("--window", type=float, default=DEFAULT_WINDOW_SECONDS,
@@ -678,6 +718,11 @@ def main(argv=None) -> int:
         load_pairs(args.out)
     except PairsFileError as exc:
         print(f"Can't use {args.out}: {exc}")
+        return 1
+    try:
+        args.roster_names = resolve_roster(args.roster)
+    except OSError as exc:
+        print(f"Can't read roster {args.roster}: {exc}")
         return 1
     try:
         reader = build_reader(args)

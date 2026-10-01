@@ -1,6 +1,6 @@
 """Merge the registration list with pairs.csv into a participant CSV.
 
-    python merge.py registration.csv pairs.csv --out participants.csv
+    python merge.py Data/registration_bibs.csv Data/pairs.csv --out Data/participants.csv
 
 The registration CSV has bib,first_name,last_name,age,gender. The output is the
 participant CSV the console imports: bib,first_name,last_name,age,gender,epc1,epc2.
@@ -87,6 +87,7 @@ def merge(registration: dict[int, dict], pairs: dict[int, str]) -> tuple[list[di
 
 
 def write_participants(path: Path, rows: list[dict]) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     with Path(path).open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=PARTICIPANT_COLUMNS, lineterminator="\n")
         writer.writeheader()
@@ -97,7 +98,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Merge registration and pairs.csv into a participant CSV.")
     parser.add_argument("registration", type=Path, help="bib,first_name,last_name,age,gender")
     parser.add_argument("pairs", type=Path, help="pairs.csv from pair.py")
-    parser.add_argument("--out", type=Path, default=Path("participants.csv"))
+    parser.add_argument("--out", type=Path, default=Path("Data") / "participants.csv",
+                        help="participant CSV to write; keep it in Data/, which git ignores")
     args = parser.parse_args(argv)
 
     try:

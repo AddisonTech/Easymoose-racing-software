@@ -156,32 +156,59 @@ know who is running.
 ## Pairing bibs
 
 Each bib has a tag stuck to it, and the participant CSV needs to know which
-EPC is on which bib. `pair.py` reads them off the reader one bib at a time.
-Run it with the race console stopped, since the reader takes one LLRP client
-at a time:
+EPC is on which bib. Everything in this section that has runner names or tag
+pairs in it lives in `Data/`, which git ignores. The repo is public, so keep
+registration exports, rosters and pair files in there.
+
+### Assign bibs
+
+Put the registration export in `Data/`, then:
+
+    .venv/bin/python assign_bibs.py Data/<registration export>.csv --title "Race name - Bib pickup"
+
+Runners are sorted by last name, then first name, ignoring case, and numbered
+from 110. It writes two files and prints counts only, never names:
+
+    Data/registration_bibs.csv   bib,first_name,last_name,age,gender,event,tshirt
+    Data/pickup_sheet.html       printable pickup list, one blank row per spare bib
+
+The export itself is left untouched. Running it again keeps the bibs already
+assigned, because by then they may be printed and handed out, and only
+rebuilds the sheet. `--force` reassigns everyone from scratch.
+
+### Pair tags to bibs
+
+Run this with the race console stopped, because the reader only takes one
+LLRP client at a time:
 
     .venv/bin/python pair.py
 
-It shows the bib number in large type. Hold that bib over antenna 1. When
-exactly one tag is read, it rings the bell, writes `bib,epc1` to `pairs.csv`
-straight away, and moves to the next bib. Take the bib away before presenting
-the next one, because nothing is captured until the field has been quiet for
-a moment. Two tags in the field are rejected with `MORE THAN ONE TAG,
-rescan`, and a tag that is already paired shows `ALREADY BIB X`.
+It shows the bib number in large type, with the runner's name from
+`Data/registration_bibs.csv` (or `spare` for an unassigned bib):
+
+    Bib 110 - Jane Doe - waiting
+
+Hold that bib over antenna 1. When exactly one tag is read, it rings the bell,
+writes `bib,epc1` to `Data/pairs.csv` straight away, and moves to the next
+bib. Take the bib away before presenting the next one, because nothing is
+captured until the field has been quiet for a moment. Two tags in the field
+are rejected with `MORE THAN ONE TAG, rescan`, and a tag that is already
+paired shows `ALREADY BIB X`.
 
     Enter   skip this bib
     b       go back one bib and clear its pair
     q       quit
 
 Quitting is safe at any point. Run it again and it carries on from the first
-bib not yet in `pairs.csv`.
+bib not yet in `Data/pairs.csv`.
 
-    --start 110 --end 310   bib range, defaults are this event's bibs
-    --power 10              dBm, for this session only
-    --min-rssi -45          ignore weaker reads while pairing
-    --host 192.168.10.20    reader IP
-    --out pairs.csv         pairs file
-    --simulate              no reader, generated tags
+    --start 110 --end 310            bib range, defaults are this event's bibs
+    --power 10                       dBm, for this session only
+    --min-rssi -45                   ignore weaker reads while pairing
+    --host 192.168.10.20             reader IP
+    --out Data/pairs.csv             pairs file
+    --roster Data/registration_bibs.csv   names to show; used by default if present
+    --simulate                       no reader, generated tags
 
 Power and the RSSI floor were set against the R420 and DogBone tags. At 12
 dBm, a bib held over the antenna read at about -30 dBm, while a bib lying a
@@ -190,27 +217,27 @@ keep that one out, because 10 dBm is the reader's lowest setting. The RSSI
 floor does. If bibs on the table still cause rejections, move them further
 away before changing these numbers.
 
-To check the work, run verify mode and walk the bibs past the antenna:
+### Verify
+
+Run verify mode and walk the bibs past the antenna:
 
     .venv/bin/python pair.py --verify
 
-Every tag shows its bib number, or `UNKNOWN TAG` if it is not in `pairs.csv`,
-with a running count of bibs confirmed. When you quit, it lists the paired
-bibs it never saw.
+Every tag shows its bib and runner, or `UNKNOWN TAG` if it is not in
+`Data/pairs.csv`, with a running count of bibs confirmed. When you quit, it
+lists the paired bibs it never saw.
 
-Then merge the registration list in. The registration CSV needs `bib`,
-`first_name`, `last_name`, `age` and `gender` columns. A registration export
-with headers like `First Name` works as it is, and any other columns are
-ignored:
+### Merge
 
-    .venv/bin/python merge.py registration.csv pairs.csv --out participants.csv
+    .venv/bin/python merge.py Data/registration_bibs.csv Data/pairs.csv --out Data/participants.csv
 
-`participants.csv` is the participant CSV the console imports. Every paired
-bib goes in, named or not, so spare bibs and day-of signups still get times.
-Registered bibs with no pair are left out and listed, because a bib without a
-tag cannot be timed.
-Registrations with no bib number yet are counted and flagged, because
-they cannot be matched to anything. Assign bibs in registration first.
+`Data/participants.csv` is the participant CSV the console imports. Every
+paired bib goes in, named or not, so spare bibs and day-of signups still get
+times. Registered bibs with no pair are left out and listed, because a bib
+without a tag cannot be timed. A registration export with headers like
+`First Name` also works, and any other columns are ignored. Registrations
+with no bib number are counted and flagged, because they can't be matched to
+anything.
 
 ## Running a real race
 
@@ -302,11 +329,11 @@ the Pi.
 
     .venv/bin/python -m pytest
 
-98 tests, a few seconds. They cover the timing rules at their edges (pre-gun
+107 tests, a few seconds. They cover the timing rules at their edges (pre-gun
 reads ignored, burst collapsing, minimum elapsed rejection including a burst
 that straddles the cutoff, dual tag selection, DNF and review), the storage
 layer, the CSV import and export, the web endpoints, EPC decoding from live
-reader reports, and bib pairing, verify and merge.
+reader reports, and bib assignment, pairing, verify and merge.
 
 Two of them matter more than the rest. One checks that live processing and a
 recompute from the read log produce identical results: what the operator reads
@@ -324,6 +351,7 @@ have.
     db.py               per-race SQLite, CSV import and export, recompute
     app.py              Flask server, live session, the reader thread
     pair.py             bib to EPC pairing and verify, off the reader
+    assign_bibs.py      bib numbers for a registration export, pickup sheet
     merge.py            registration plus pairs.csv into a participant CSV
     templates/          two pages: the archive and the race console
     static/             one stylesheet, one script, no CDN, no build step
