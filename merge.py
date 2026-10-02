@@ -22,6 +22,14 @@ from pair import PairsFileError, format_bibs, load_pairs
 REGISTRATION_FIELDS = ["first_name", "last_name", "age", "gender"]
 PARTICIPANT_COLUMNS = ["bib", "first_name", "last_name", "age", "gender", "epc1", "epc2"]
 
+# The virtual entry. Those runners are mailed an unchipped bib, so they hold
+# none of the timing bibs and never appear in the participant CSV.
+VIRTUAL_EVENT = "YOUR time, YOUR place"
+
+
+def is_virtual(event: str | None) -> bool:
+    return VIRTUAL_EVENT.casefold() in (event or "").casefold()
+
 
 class RegistrationError(ValueError):
     pass
@@ -38,7 +46,8 @@ def load_registration(path: Path) -> tuple[dict[int, dict], int]:
 
     Also returns how many registrations have no bib yet. Those cannot be
     matched to a pair, so the caller has to say so rather than drop them
-    quietly. Columns other than the ones needed are ignored.
+    quietly. Virtual runners have no timing bib on purpose and are not counted.
+    Columns other than the ones needed are ignored.
     """
     with Path(path).open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
@@ -53,6 +62,8 @@ def load_registration(path: Path) -> tuple[dict[int, dict], int]:
         for line_number, row in enumerate(reader, start=2):
             text = (row.get(headers["bib"]) or "").strip()
             if not text:
+                if "event" in headers and is_virtual(row.get(headers["event"])):
+                    continue
                 if any((value or "").strip() for value in row.values() if isinstance(value, str)):
                     no_bib += 1
                 continue

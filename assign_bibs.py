@@ -15,6 +15,10 @@ with the bib registration already holds for them if it has one, otherwise the
 next unassigned bibs in order. If registration holds a different bib for a
 runner already in the roster, nothing is written. --force reassigns from
 scratch.
+Virtual runners, entered in the "YOUR time, YOUR place" event, are mailed an
+unchipped bib, so they stay on the roster and the sheet with a blank bib and
+hold none of the timing bibs. One who was given a timing bib earlier hands it
+back to the spares; no other bib moves. They are left out of the bib import.
 A roster written before registration_id was recorded gets it filled in from
 the export, matched row by row, with every bib left where it is.
 
@@ -31,7 +35,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from merge import header_key
+from merge import header_key, is_virtual
 from pair import DATA_DIR, DEFAULT_ROSTER, FIRST_BIB, LAST_BIB, format_bibs
 
 DEFAULT_SHEET = DATA_DIR / "pickup_sheet.html"
@@ -92,13 +96,27 @@ def read_export(path: Path) -> tuple[list[dict], int]:
     return runners, nameless
 
 
+def by_name(row: dict) -> tuple:
+    return row["last_name"].casefold(), row["first_name"].casefold()
+
+
+def by_bib(row: dict) -> tuple:
+    """Numbered rows in bib order, then virtual runners by name."""
+    return (row["bib"] is None, row["bib"] or 0, *by_name(row))
+
+
 def assign(runners: list[dict], first_bib: int = FIRST_BIB, last_bib: int = LAST_BIB) -> list[dict]:
-    """Sort by last name then first name, ignoring case, and number from first_bib."""
+    """Sort by last name then first name, ignoring case, and number from first_bib.
+
+    Virtual runners are kept with no bib and do not use one up.
+    """
+    timed = [r for r in runners if not is_virtual(r["event"])]
     capacity = last_bib - first_bib + 1
-    if len(runners) > capacity:
-        raise AssignError(f"{len(runners)} runners but only {capacity} bibs ({first_bib}-{last_bib})")
-    ordered = sorted(runners, key=lambda r: (r["last_name"].casefold(), r["first_name"].casefold()))
-    return [{"bib": first_bib + index, **runner} for index, runner in enumerate(ordered)]
+    if len(timed) > capacity:
+        raise AssignError(f"{len(timed)} runners but only {capacity} bibs ({first_bib}-{last_bib})")
+    rows = [{**runner, "bib": first_bib + index} for index, runner in enumerate(sorted(timed, key=by_name))]
+    rows += [{**runner, "bib": None} for runner in sorted(runners, key=by_name) if is_virtual(runner["event"])]
+    return rows
 
 
 def write_roster(path: Path, rows: list[dict]) -> None:
@@ -110,6 +128,7 @@ def write_roster(path: Path, rows: list[dict]) -> None:
 
 
 def read_roster(path: Path) -> list[dict]:
+    """Roster rows with the bib as an int, or None for a named runner with no bib."""
     with Path(path).open(newline="", encoding="utf-8-sig") as handle:
         rows = []
         for row in csv.DictReader(handle):
@@ -117,7 +136,20 @@ def read_roster(path: Path) -> list[dict]:
             if row["bib"].isdigit():
                 row["bib"] = int(row["bib"])
                 rows.append(row)
+            elif not row["bib"] and (row["first_name"] or row["last_name"]):
+                row["bib"] = None
+                rows.append(row)
     return rows
+
+
+def release_virtual_bibs(rows: list[dict]) -> list[int]:
+    """Take the timing bib back from any virtual runner. Returns the bibs freed."""
+    released = []
+    for row in rows:
+        if is_virtual(row["event"]) and row["bib"] is not None:
+            released.append(row["bib"])
+            row["bib"] = None
+    return sorted(released)
 
 
 SHEET_STYLE = """
@@ -155,15 +187,15 @@ def pickup_sheet(rows: list[dict], title: str, spare_bibs: list[int], spare: str
     day signups take the next bib and have their name written in. They sit in
     the same table, so the column headings repeat on every printed page.
     """
-    ordered = sorted(rows, key=lambda r: (r["last_name"].casefold(), r["first_name"].casefold()))
     body = []
-    for row in ordered:
+    for row in sorted(rows, key=by_name):
+        virtual = is_virtual(row["event"])
         body.append(
             "<tr>"
             f"<td>{html.escape(row['last_name'])}</td>"
             f"<td>{html.escape(row['first_name'])}</td>"
-            f"<td class=\"bib\">{row['bib']}</td>"
-            f"<td class=\"event\">{html.escape(row['event'])}</td>"
+            f"<td class=\"bib\">{'' if row['bib'] is None else row['bib']}</td>"
+            f"<td class=\"event\">{'Virtual' if virtual else html.escape(row['event'])}</td>"
             f"<td class=\"tshirt\">{html.escape(row['tshirt'])}</td>"
             "<td><span class=\"box\"></span></td>"
             "</tr>"
@@ -205,17 +237,17 @@ def backfill_registration_ids(rows: list[dict], runners: list[dict]) -> int:
             candidates.setdefault(match_key(runner), []).append(runner["registration_id"])
 
     filled = {}
-    for row in rows:
+    for index, row in enumerate(rows):
         if row["registration_id"]:
             continue
         found = candidates.get(match_key(row), [])
         if len(found) != 1:
             problem = "no row" if not found else "more than one row"
-            raise AssignError(f"bib {row['bib']} matches {problem} in the export; no IDs were filled")
-        filled[row["bib"]] = found[0]
-    for row in rows:
-        if row["bib"] in filled:
-            row["registration_id"] = filled[row["bib"]]
+            which = f"bib {row['bib']}" if row["bib"] is not None else "a virtual runner"
+            raise AssignError(f"{which} matches {problem} in the export; no IDs were filled")
+        filled[index] = found[0]
+    for index, registration_id in filled.items():
+        rows[index]["registration_id"] = registration_id
     return len(filled)
 
 
@@ -226,19 +258,25 @@ def add_new_runners(rows: list[dict], runners: list[dict], first_bib: int, last_
     registration already holds for them; the rest are sorted by last name and
     take the lowest unassigned bibs. Raises, changing nothing, if registration
     holds a different bib for a runner already in the roster, or a bib that is
-    taken or out of range. Returns the new rows.
+    taken or out of range. Virtual runners are added with no bib, and whatever
+    bib registration holds for them is not checked: theirs is not a timing bib.
+    Returns the new rows.
     """
     by_id = {row["registration_id"]: row for row in rows if row["registration_id"]}
-    used = {row["bib"] for row in rows}
-    differs, held, new = [], {}, []
+    used = {row["bib"] for row in rows if row["bib"] is not None}
+    differs, held, new, virtual = [], {}, [], []
     for runner in runners:
+        if is_virtual(runner["event"]):
+            if runner["registration_id"] and runner["registration_id"] not in by_id:
+                virtual.append({**runner, "bib": None})
+            continue
         held_bib = runner.get("registration_bib", "")
         if held_bib and not held_bib.isdigit():
             raise AssignError(f"registration bib {held_bib!r} is not a number")
         existing = by_id.get(runner["registration_id"])
         if existing:
             if held_bib and int(held_bib) != existing["bib"]:
-                differs.append(f"roster {existing['bib']} vs registration {held_bib}")
+                differs.append(f"roster {existing['bib'] or 'blank'} vs registration {held_bib}")
         elif runner["registration_id"]:
             new.append(runner)
             if held_bib:
@@ -253,14 +291,17 @@ def add_new_runners(rows: list[dict], runners: list[dict], first_bib: int, last_
     unheld = [r for r in new if not r.get("registration_bib")]
     if len(unheld) > len(free):
         raise AssignError(f"{len(unheld)} new runners but only {len(free)} unassigned bibs")
-    ordered = sorted(unheld, key=lambda r: (r["last_name"].casefold(), r["first_name"].casefold()))
     added = [{**runner, "bib": bib} for bib, runner in held.items()]
-    added += [{**runner, "bib": bib} for bib, runner in zip(free, ordered)]
-    return sorted(added, key=lambda r: r["bib"])
+    added += [{**runner, "bib": bib} for bib, runner in zip(free, sorted(unheld, key=by_name))]
+    return sorted(added + virtual, key=by_bib)
 
 
-def write_runsignup(path: Path, rows: list[dict]) -> None:
-    """Registration ID and Bib, one row per runner, for the bib import."""
+def write_runsignup(path: Path, rows: list[dict]) -> int:
+    """Registration ID and Bib, one row per timing bib, for the bib import.
+
+    Virtual runners have no bib here and are left out. Returns the row count.
+    """
+    rows = [row for row in rows if row["bib"] is not None]
     missing = [row["bib"] for row in rows if not row["registration_id"]]
     if missing:
         raise AssignError(f"no registration ID for bibs {format_bibs(missing)}")
@@ -270,10 +311,11 @@ def write_runsignup(path: Path, rows: list[dict]) -> None:
         writer.writerow(["Registration ID", "Bib"])
         for row in sorted(rows, key=lambda r: r["bib"]):
             writer.writerow([row["registration_id"], row["bib"]])
+    return len(rows)
 
 
 def spare_bibs(rows: list[dict], first_bib: int, last_bib: int) -> list[int]:
-    used = {row["bib"] for row in rows}
+    used = {row["bib"] for row in rows if row["bib"] is not None}
     return [bib for bib in range(first_bib, last_bib + 1) if bib not in used]
 
 
@@ -304,12 +346,16 @@ def main(argv=None) -> int:
                 write_roster(args.out, rows)
                 print(f"Filled in {filled} registration IDs from {args.export.name}; no bib changed.")
             before = len(rows)
+            released = release_virtual_bibs(rows)
             added = add_new_runners(rows, runners, args.first, args.last)
-            if added:
-                rows = sorted(rows + added, key=lambda r: r["bib"])
+            if added or released:
+                rows = sorted(rows + added, key=by_bib)
                 write_roster(args.out, rows)
+            new_bibs = [r["bib"] for r in added if r["bib"] is not None]
             print(f"Runners before: {before}. Now: {len(rows)}. "
-                  f"New runners given bibs: {format_bibs([r['bib'] for r in added]) if added else 'none'}.")
+                  f"New runners given bibs: {format_bibs(new_bibs) if new_bibs else 'none'}.")
+            if released:
+                print(f"Returned to spares by virtual runners: {format_bibs(released)}.")
             no_id = sum(1 for r in runners if not r["registration_id"])
             if no_id:
                 print(f"WARNING: {no_id} export rows have no registration ID and were not added.")
@@ -320,12 +366,13 @@ def main(argv=None) -> int:
             print(f"Assigned {len(rows)} runners from {args.export.name} to {args.out}.")
             if nameless:
                 print(f"WARNING: {nameless} rows had no name and were not given a bib.")
-        write_runsignup(args.runsignup, rows)
+        imported = write_runsignup(args.runsignup, rows)
     except (AssignError, OSError) as exc:
         print(f"Error: {exc}")
         return 1
 
-    last_used = max((row["bib"] for row in rows), default=None)
+    virtual = sum(1 for row in rows if row["bib"] is None)
+    last_used = max((row["bib"] for row in rows if row["bib"] is not None), default=None)
     spare_list = spare_bibs(rows, args.first, args.last)
     spare, spare_count = format_bibs(spare_list) if spare_list else "none", len(spare_list)
     signup_bibs = spare_list if args.blank_rows is None else spare_list[:args.blank_rows]
@@ -335,10 +382,11 @@ def main(argv=None) -> int:
     events: dict[str, int] = {}
     for row in rows:
         events[row["event"] or "(none)"] = events.get(row["event"] or "(none)", 0) + 1
+    print(f"Runners with bibs: {len(rows) - virtual}. Virtual runners, no timing bib: {virtual}.")
     print(f"Last bib used: {last_used}. Spare for day-of signups: {spare} ({spare_count} bibs).")
     print("By event: " + ", ".join(f"{name} {count}" for name, count in sorted(events.items())))
     print(f"Pickup sheet: {args.sheet} ({len(rows)} runners, {len(signup_bibs)} signup rows).")
-    print(f"Bib import: {args.runsignup} ({len(rows)} rows).")
+    print(f"Bib import: {args.runsignup} ({imported} rows).")
     return 0
 
 

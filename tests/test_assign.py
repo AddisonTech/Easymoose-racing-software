@@ -322,3 +322,111 @@ def test_a_new_runner_holding_a_bib_already_in_the_roster_is_refused(tmp_path):
     with pytest.raises(AssignError, match="registration bib 110"):
         add_new_runners(rows, runners, 110, 120)
     assert len(rows) == 1
+
+
+# ------------------------------------------------------------------ virtual runners
+
+VIRTUAL = "Panther Prowl 5K - YOUR time, YOUR place!"
+
+
+def virtual_runner(first, last):
+    return runner(first, last, event=VIRTUAL)
+
+
+def test_virtual_runners_get_no_bib_and_use_none_up():
+    rows = assign([runner("Wren", "Oakley"), virtual_runner("Vi", "Abbott"), runner("Ana", "Moss")])
+    assert [(r["bib"], r["last_name"]) for r in rows] == [(110, "Moss"), (111, "Oakley"), (None, "Abbott")]
+
+
+def test_a_roster_with_a_blank_bib_reads_and_writes_cleanly(tmp_path):
+    from assign_bibs import write_roster
+
+    roster = tmp_path / "registration_bibs.csv"
+    text = ("bib,first_name,last_name,age,gender,event,tshirt,registration_id\n"
+            "110,Ana,Moss,30,F,5K (Adult),M,9001\n"
+            f",Vi,Abbott,30,F,\"{VIRTUAL}\",M,9002\n")
+    roster.write_text(text, encoding="utf-8")
+    rows = read_roster(roster)
+    assert [(r["bib"], r["registration_id"]) for r in rows] == [(110, "9001"), (None, "9002")]
+    write_roster(roster, rows)
+    assert roster.read_text(encoding="utf-8") == text
+
+
+def test_a_virtual_runner_gives_back_a_timing_bib_and_nothing_else_moves(tmp_path, capsys):
+    roster = tmp_path / "Data" / "registration_bibs.csv"
+    roster.parent.mkdir()
+    roster.write_text(
+        "bib,first_name,last_name,age,gender,event,tshirt,registration_id\n"
+        "110,Ike,Amsel,30,F,5K (Adult),M,9001\n"
+        "111,Tova,Zeller,30,F,5K (Adult),M,9000\n"
+        "112,Abe,Aaron,30,F,5K (Adult),M,9003\n"
+        f"113,Vi,Moss,30,F,\"{VIRTUAL}\",M,9004\n"
+        "114,Wren,Yates,30,F,5K (Adult),M,9002\n",
+        encoding="utf-8",
+    )
+    export = tmp_path / "export.csv"
+    export.write_text(
+        EXPORT_HEADER
+        + "9000,Tova,,Zeller,111,F,30,M,5K (Adult)\n"
+        + "9001,Ike,,Amsel,110,F,30,M,5K (Adult)\n"
+        + "9002,Wren,,Yates,,F,30,M,5K (Adult)\n"
+        + "9003,Abe,,Aaron,112,F,30,M,5K (Adult)\n"
+        + f"9004,Vi,,Moss,,F,30,M,\"{VIRTUAL}\"\n",
+        encoding="utf-8",
+    )
+    assert main([str(export), "--first", "110", "--last", "120", "--title", "T"]) == 0
+
+    assert [(r["bib"], r["registration_id"]) for r in read_roster(roster)] == [
+        (110, "9001"), (111, "9000"), (112, "9003"), (114, "9002"), (None, "9004")]
+    printed = capsys.readouterr().out
+    assert "Returned to spares by virtual runners: 113." in printed
+    assert "Runners with bibs: 4. Virtual runners, no timing bib: 1." in printed
+    assert "Spare for day-of signups: 113, 115-120 (7 bibs)." in printed
+    assert "Moss" not in printed
+
+    lines = (tmp_path / "Data" / "runsignup_bib_import.csv").read_text(encoding="utf-8").splitlines()
+    assert lines == ["Registration ID,Bib", "9001,110", "9000,111", "9003,112", "9002,114"]
+
+    page = (tmp_path / "Data" / "pickup_sheet.html").read_text(encoding="utf-8")
+    assert ('<tr><td>Moss</td><td>Vi</td><td class="bib"></td><td class="event">Virtual</td>'
+            in page)
+    assert page.index("Aaron") < page.index("Amsel") < page.index("Moss") < page.index("Yates")
+    assert VIRTUAL not in page
+    signups = page[page.index("Race day signups"):]
+    assert re.findall(r'<td class="bib">(\d+)</td>', signups) == ["113", "115", "116", "117", "118", "119", "120"]
+
+    # Running again changes nothing.
+    before = roster.read_bytes()
+    assert main([str(export), "--first", "110", "--last", "120", "--title", "T"]) == 0
+    assert roster.read_bytes() == before
+    assert "Returned to spares" not in capsys.readouterr().out
+
+
+def test_a_new_virtual_runner_is_added_without_a_bib_and_holds_none_back(tmp_path, capsys):
+    roster = roster_of(tmp_path, (110, "Ike", "Amsel", "9001"))
+    export = tmp_path / "export.csv"
+    write_export_with_bibs(export, [("9001", "Ike", "Amsel", "110"), ("9002", "Wren", "Yates", "")])
+    export.write_text(export.read_text(encoding="utf-8") + f"9003,Vi,,Moss,1001,F,30,M,\"{VIRTUAL}\"\n",
+                      encoding="utf-8")
+    assert main([str(export), "--first", "110", "--last", "120"]) == 0
+    assert [(r["bib"], r["registration_id"]) for r in read_roster(roster)] == [
+        (110, "9001"), (111, "9002"), (None, "9003")]
+    assert "New runners given bibs: 111." in capsys.readouterr().out
+
+
+def test_a_virtual_runner_has_no_row_in_the_participant_csv(tmp_path):
+    from merge import load_registration, merge
+    from pair import load_roster
+
+    roster = tmp_path / "registration_bibs.csv"
+    roster.write_text(
+        "bib,first_name,last_name,age,gender,event,tshirt,registration_id\n"
+        "110,Ana,Moss,30,F,5K (Adult),M,9001\n"
+        f",Vi,Abbott,30,F,\"{VIRTUAL}\",M,9002\n",
+        encoding="utf-8",
+    )
+    people, no_bib = load_registration(roster)
+    assert (list(people), no_bib) == ([110], 0)  # virtual is not a missing bib
+    rows, _ = merge(people, {110: "E1", 111: "E2"})
+    assert [(r["bib"], r["last_name"]) for r in rows] == [(110, "Moss"), (111, "")]
+    assert load_roster(roster) == {110: "Ana Moss"}
