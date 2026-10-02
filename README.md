@@ -170,12 +170,21 @@ Runners are sorted by last name, then first name, ignoring case, and numbered
 from 110. It writes three files and prints counts only, never names:
 
     Data/registration_bibs.csv     bib,first_name,last_name,age,gender,event,tshirt,registration_id
-    Data/pickup_sheet.html         printable pickup list, one blank row per spare bib
+    Data/pickup_sheet.html         printable pickup list, then one numbered row per spare bib
     Data/runsignup_bib_import.csv  Registration ID,Bib, for loading bibs back into registration
 
-The export itself is left untouched. Running it again keeps the bibs already
-assigned, because by then they may be printed and handed out, and only
-rebuilds the sheet. `--force` reassigns everyone from scratch.
+The export itself is left untouched. Running it again with a newer export
+keeps every bib already assigned, because by then they may be printed and
+handed out. Runners new to the export are added: a runner who already has a
+bib in registration keeps it, and the rest take the next unassigned bibs in
+name order. If registration holds a different bib for a runner already in the
+roster, it stops and names the bibs without writing anything. `--force`
+reassigns everyone from scratch.
+
+After the named runners, the pickup sheet has a row for every spare bib, in
+order, under "Race day signups: hand out the next bib in order and write the
+name." Name, event and shirt are left empty to fill in by hand. The column
+headings repeat on every printed page.
 
 ### Load bibs back into RunSignup
 

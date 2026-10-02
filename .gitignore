@@ -10,3 +10,5 @@ races/*
 # whatever core.ignorecase says.
 [Dd][Aa][Tt][Aa]/
 pairs.csv
+# Copies of Data/ taken before re-running assign_bibs.py hold the same runner data.
+[Dd][Aa][Tt][Aa]_[Bb][Aa][Cc][Kk][Uu][Pp]*/

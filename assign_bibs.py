@@ -9,8 +9,12 @@ for the bib pickup table. It also writes Data/runsignup_bib_import.csv,
 Registration ID and Bib, for loading the bibs back into registration.
 
 Once bibs are assigned they are printed on the sheet and handed out, so
-running this again does not reassign them. It rebuilds the pickup sheet from
-the existing registration_bibs.csv instead. --force reassigns from scratch.
+running this again does not reassign them. Runners already in
+registration_bibs.csv keep their bibs, and anyone new in the export is added:
+with the bib registration already holds for them if it has one, otherwise the
+next unassigned bibs in order. If registration holds a different bib for a
+runner already in the roster, nothing is written. --force reassigns from
+scratch.
 A roster written before registration_id was recorded gets it filled in from
 the export, matched row by row, with every bib left where it is.
 
@@ -49,7 +53,10 @@ EXPORT_COLUMNS = {
     "t_shirt": "tshirt",
     "tshirt": "tshirt",
     "registration_id": "registration_id",
+    "bib": "registration_bib",
 }
+
+SIGNUP_HEADER = "Race day signups: hand out the next bib in order and write the name."
 
 
 class AssignError(ValueError):
@@ -75,7 +82,7 @@ def read_export(path: Path) -> tuple[list[dict], int]:
         for row in reader:
             runner = {
                 key: (row.get(columns[key]) or "").strip() if key in columns else ""
-                for key in ROSTER_COLUMNS if key != "bib"
+                for key in [*ROSTER_COLUMNS[1:], "registration_bib"]
             }
             if not runner["first_name"] and not runner["last_name"]:
                 if any((value or "").strip() for value in row.values() if isinstance(value, str)):
@@ -97,7 +104,7 @@ def assign(runners: list[dict], first_bib: int = FIRST_BIB, last_bib: int = LAST
 def write_roster(path: Path, rows: list[dict]) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with Path(path).open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=ROSTER_COLUMNS, lineterminator="\n")
+        writer = csv.DictWriter(handle, fieldnames=ROSTER_COLUMNS, extrasaction="ignore", lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -130,16 +137,24 @@ SHEET_STYLE = """
   td.event, td.tshirt { font-size: 14pt; white-space: nowrap; }
   .box { display: inline-block; width: 26px; height: 26px; border: 2px solid #000; }
   tr.blank td { height: 44px; background: #fff; }
+  tr.signup-header td { font-weight: bold; font-size: 15pt; border-bottom: 2px solid #000;
+                        padding-top: 18px; background: #fff; }
   @media print {
     body { padding: 0; }
     @page { margin: 12mm; }
     tbody tr:nth-child(even) td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    tr.signup-header { page-break-after: avoid; break-after: avoid; }
   }
 """
 
 
-def pickup_sheet(rows: list[dict], title: str, blank_rows: int, spare: str) -> str:
-    """A printable pickup list, sorted by last name, with blank rows for signups."""
+def pickup_sheet(rows: list[dict], title: str, spare_bibs: list[int], spare: str) -> str:
+    """A printable pickup list, sorted by last name, then one row per spare bib.
+
+    The spare rows carry their bib number in order and nothing else, so race
+    day signups take the next bib and have their name written in. They sit in
+    the same table, so the column headings repeat on every printed page.
+    """
     ordered = sorted(rows, key=lambda r: (r["last_name"].casefold(), r["first_name"].casefold()))
     body = []
     for row in ordered:
@@ -153,8 +168,10 @@ def pickup_sheet(rows: list[dict], title: str, blank_rows: int, spare: str) -> s
             "<td><span class=\"box\"></span></td>"
             "</tr>"
         )
-    for _ in range(blank_rows):
-        body.append("<tr class=\"blank\"><td></td><td></td><td></td><td></td><td></td>"
+    if spare_bibs:
+        body.append(f"<tr class=\"signup-header\"><td colspan=\"6\">{html.escape(SIGNUP_HEADER)}</td></tr>")
+    for bib in spare_bibs:
+        body.append(f"<tr class=\"blank\"><td></td><td></td><td class=\"bib\">{bib}</td><td></td><td></td>"
                     "<td><span class=\"box\"></span></td></tr>")
     return (
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
@@ -202,6 +219,46 @@ def backfill_registration_ids(rows: list[dict], runners: list[dict]) -> int:
     return len(filled)
 
 
+def add_new_runners(rows: list[dict], runners: list[dict], first_bib: int, last_bib: int) -> list[dict]:
+    """Give bibs to export runners not yet in the roster, without moving any bib.
+
+    Runners are matched by registration ID. A new runner keeps the bib
+    registration already holds for them; the rest are sorted by last name and
+    take the lowest unassigned bibs. Raises, changing nothing, if registration
+    holds a different bib for a runner already in the roster, or a bib that is
+    taken or out of range. Returns the new rows.
+    """
+    by_id = {row["registration_id"]: row for row in rows if row["registration_id"]}
+    used = {row["bib"] for row in rows}
+    differs, held, new = [], {}, []
+    for runner in runners:
+        held_bib = runner.get("registration_bib", "")
+        if held_bib and not held_bib.isdigit():
+            raise AssignError(f"registration bib {held_bib!r} is not a number")
+        existing = by_id.get(runner["registration_id"])
+        if existing:
+            if held_bib and int(held_bib) != existing["bib"]:
+                differs.append(f"roster {existing['bib']} vs registration {held_bib}")
+        elif runner["registration_id"]:
+            new.append(runner)
+            if held_bib:
+                bib = int(held_bib)
+                if not first_bib <= bib <= last_bib or bib in used or bib in held:
+                    raise AssignError(f"registration bib {bib} for a new runner is taken or out of range")
+                held[bib] = runner
+    if differs:
+        raise AssignError("registration bibs differ from the roster: " + "; ".join(differs))
+
+    free = [bib for bib in range(first_bib, last_bib + 1) if bib not in used and bib not in held]
+    unheld = [r for r in new if not r.get("registration_bib")]
+    if len(unheld) > len(free):
+        raise AssignError(f"{len(unheld)} new runners but only {len(free)} unassigned bibs")
+    ordered = sorted(unheld, key=lambda r: (r["last_name"].casefold(), r["first_name"].casefold()))
+    added = [{**runner, "bib": bib} for bib, runner in held.items()]
+    added += [{**runner, "bib": bib} for bib, runner in zip(free, ordered)]
+    return sorted(added, key=lambda r: r["bib"])
+
+
 def write_runsignup(path: Path, rows: list[dict]) -> None:
     """Registration ID and Bib, one row per runner, for the bib import."""
     missing = [row["bib"] for row in rows if not row["registration_id"]]
@@ -215,12 +272,9 @@ def write_runsignup(path: Path, rows: list[dict]) -> None:
             writer.writerow([row["registration_id"], row["bib"]])
 
 
-def spare_range(rows: list[dict], first_bib: int, last_bib: int) -> tuple[int | None, str]:
-    """The highest bib used, and the unused range as text."""
+def spare_bibs(rows: list[dict], first_bib: int, last_bib: int) -> list[int]:
     used = {row["bib"] for row in rows}
-    last_used = max(used) if used else None
-    spare = [bib for bib in range(first_bib, last_bib + 1) if bib not in used]
-    return last_used, format_bibs(spare) if spare else "none"
+    return [bib for bib in range(first_bib, last_bib + 1) if bib not in used]
 
 
 def main(argv=None) -> int:
@@ -234,7 +288,7 @@ def main(argv=None) -> int:
     parser.add_argument("--first", type=int, default=FIRST_BIB)
     parser.add_argument("--last", type=int, default=LAST_BIB)
     parser.add_argument("--blank-rows", type=int, default=None,
-                        help="empty rows for day-of signups; default one per spare bib")
+                        help="signup rows, taking spare bibs in order; default one per spare bib")
     parser.add_argument("--force", action="store_true",
                         help="reassign even though bibs were already assigned")
     args = parser.parse_args(argv)
@@ -249,10 +303,16 @@ def main(argv=None) -> int:
                 filled = backfill_registration_ids(rows, runners)
                 write_roster(args.out, rows)
                 print(f"Filled in {filled} registration IDs from {args.export.name}; no bib changed.")
-            assigned = {row["registration_id"] for row in rows}
-            unassigned = sum(1 for r in runners if r["registration_id"] and r["registration_id"] not in assigned)
-            if unassigned:
-                print(f"NOTE: {unassigned} runners in the export have no bib yet.")
+            before = len(rows)
+            added = add_new_runners(rows, runners, args.first, args.last)
+            if added:
+                rows = sorted(rows + added, key=lambda r: r["bib"])
+                write_roster(args.out, rows)
+            print(f"Runners before: {before}. Now: {len(rows)}. "
+                  f"New runners given bibs: {format_bibs([r['bib'] for r in added]) if added else 'none'}.")
+            no_id = sum(1 for r in runners if not r["registration_id"])
+            if no_id:
+                print(f"WARNING: {no_id} export rows have no registration ID and were not added.")
         else:
             runners, nameless = read_export(args.export)
             rows = assign(runners, args.first, args.last)
@@ -265,18 +325,19 @@ def main(argv=None) -> int:
         print(f"Error: {exc}")
         return 1
 
-    last_used, spare = spare_range(rows, args.first, args.last)
-    spare_count = (args.last - args.first + 1) - len(rows)
-    blank_rows = spare_count if args.blank_rows is None else args.blank_rows
+    last_used = max((row["bib"] for row in rows), default=None)
+    spare_list = spare_bibs(rows, args.first, args.last)
+    spare, spare_count = format_bibs(spare_list) if spare_list else "none", len(spare_list)
+    signup_bibs = spare_list if args.blank_rows is None else spare_list[:args.blank_rows]
     args.sheet.parent.mkdir(parents=True, exist_ok=True)
-    args.sheet.write_text(pickup_sheet(rows, args.title, blank_rows, spare), encoding="utf-8")
+    args.sheet.write_text(pickup_sheet(rows, args.title, signup_bibs, spare), encoding="utf-8")
 
     events: dict[str, int] = {}
     for row in rows:
         events[row["event"] or "(none)"] = events.get(row["event"] or "(none)", 0) + 1
     print(f"Last bib used: {last_used}. Spare for day-of signups: {spare} ({spare_count} bibs).")
     print("By event: " + ", ".join(f"{name} {count}" for name, count in sorted(events.items())))
-    print(f"Pickup sheet: {args.sheet} ({len(rows)} runners, {blank_rows} blank rows).")
+    print(f"Pickup sheet: {args.sheet} ({len(rows)} runners, {len(signup_bibs)} signup rows).")
     print(f"Bib import: {args.runsignup} ({len(rows)} rows).")
     return 0
 
