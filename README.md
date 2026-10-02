@@ -167,7 +167,7 @@ Put the registration export in `Data/`, then:
     .venv/bin/python assign_bibs.py Data/<registration export>.csv --title "Race name - Bib pickup"
 
 Runners are sorted by last name, then first name, ignoring case, and numbered
-from 110. It writes two files and prints counts only, never names:
+from 110. It writes three files and prints counts only, never names:
 
     Data/registration_bibs.csv     bib,first_name,last_name,age,gender,event,tshirt,registration_id
     Data/pickup_sheet.html         printable pickup list, one blank row per spare bib
@@ -176,6 +176,18 @@ from 110. It writes two files and prints counts only, never names:
 The export itself is left untouched. Running it again keeps the bibs already
 assigned, because by then they may be printed and handed out, and only
 rebuilds the sheet. `--force` reassigns everyone from scratch.
+
+### Load bibs back into RunSignup
+
+`Data/runsignup_bib_import.csv` has two columns, `Registration ID` and `Bib`,
+one row per registered runner, sorted by bib. Upload it with RunSignup's bib
+number import and map those two columns, so registration shows the same bibs
+as the pickup sheet. The registration ID comes from the export's
+`Registration ID` column. If any runner is missing one, no import file is
+written and the bibs without an ID are listed. A roster made before IDs were
+recorded gets them filled in from the export on the next run. Each runner is
+matched on name, age, gender, event and shirt, and no bib moves. If any runner
+does not match exactly one export row, nothing is filled.
 
 ### Pair tags to bibs
 
