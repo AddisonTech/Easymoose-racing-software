@@ -278,14 +278,73 @@ anything.
    been standing in the start read zone for ten minutes.
 5. **During.** The live results view lists finishers newest first. Press
    **EXPORT CSV** whenever anyone wants standings; it writes a timestamped
-   file and never interrupts the reads.
-6. **After.** Press **Stop reader**. Export once more for the final results.
-   If anything needs correcting afterwards, fix it and press **Recompute from
-   reads**: results are rebuilt from the raw log, so nothing is lost.
+   file and never interrupts the reads. Fix anything that is pointed out with
+   the **Corrections** panel, below.
+6. **After.** Press **Stop reader**. The race clock stops there. Export once
+   more for the final results. If anything needs correcting afterwards, fix
+   it and press **Recompute from reads**: results are rebuilt from the raw
+   log with the corrections laid back over them, so nothing is lost.
 
 The console binds to `0.0.0.0`, so a laptop or phone on the same network can
-open it at the address `run.sh` prints. Useful for putting results on a screen
-at the finish while the Pi stays in a case by the antennas.
+open it at the address `run.sh` prints.
+
+### The tent display
+
+**Tent display** at the top of the console opens `/races/<slug>/board` in a
+new window. Put it full screen on the monitor at the timing tent. It has no
+buttons or forms, so nobody at the tent can touch the race from it.
+
+The left side is every finisher in the order they crossed the line, laid out
+like the console's results table: overall place and time by gun time, the
+chip time smaller beside it, and a coloured M, F or J for the category. It spreads
+over as many columns, and shrinks the text as far as it has to, to keep the
+whole field on screen. The right side is the current top three in each
+category: Adult Male, Adult Female and Juniors (12 and under, both genders),
+all ranked by gun time. Both update once a second.
+
+The header carries the EasyMoose logo, the race name, the timing sponsor
+(`templates/sponsor.html`, one file to swap) and the race clock. Behind it,
+dimmed, the race's sponsor logos scroll right to left. Add them on the
+console's Setup tab under **Sponsors**: PNG, JPG, GIF or WebP up to 5 MB, a
+wide logo on a transparent background works best. They are stored in the
+race's own folder, so they never reach git, and the display picks up a new
+one within a second.
+
+### Corrections
+
+On the console's Live results tab. The tent display changes at once.
+
+| Correction | Use it for |
+| --- | --- |
+| Set time | A wrong time, or a runner the reader missed. Type the chip time, `46:31.19`; `46:31:19` is read the same way. The gun time follows from their start read, or is the same if they have none. |
+| Swap times | Two runners wearing each other's bibs. |
+| Remove | A finish that is not real. |
+| Undo correction | Back to the time from the reads. |
+
+Corrections never edit the reads. They are stored separately and laid over
+the computed results, so a recompute keeps them and Undo gives the computed
+time back. A runner's name, age or gender is fixed on the Participants tab:
+click the runner to fill the form in. Changing an age moves them between
+adult and junior.
+
+### Sending results to RunSignup
+
+Setup tab, **RunSignup**: the race ID, and the event and result set IDs for
+adults and juniors, then tick **Send results**. The key and secret go in
+`.env` (see below). Juniors (12 and under) go to the junior set and everyone
+else to the adult set, whatever event they registered for.
+
+A result is sent once it has gone five minutes without changing, so a
+correction made at the tent inside that window is the only version that
+reaches RunSignup, and the only one that texts the runner. Both times are
+sent for every runner: clock time (gun time) and chip time. Places within a
+set go by gun time. A later correction updates the result already on RunSignup instead of
+adding a second one. Two things are left to a person and listed on the Setup
+tab: a result removed after it was sent, and a runner moved between adult and
+junior after they were sent. Sending is refused in simulate mode, and a send
+that fails, with no internet at the finish say, is tried again on the next
+pass. From 1 January 2027 RunSignup also wants `RUNSIGNUP_API_REG` and
+`RUNSIGNUP_API_REG_SECRET` in `.env`.
 
 ## The timing rules
 
@@ -297,11 +356,15 @@ tested without hardware or a database.
 | Gun time | Recorded when the operator confirms START. |
 | Start | First read of any of the participant's EPCs on ports 1 or 2 at or after the gun. |
 | Finish | First crossing on ports 3 or 4 at least `min_elapsed_seconds` after that runner's own start. Default 720. |
+| No start read | Timed from the gun to the first finish crossing at least `min_elapsed_seconds` after the gun, and marked gun time. A packed start hides tags from the start antennas. |
 | Bursts | Reads less than 2 seconds apart are one crossing; the earliest read in the burst is the time. |
 | Dual tags | Whichever tag gives the earlier valid crossing. |
 | Elapsed | Finish minus start, to hundredths of a second. |
 | Start, no finish | DNF. |
-| Finish, no start | Flagged for review. Never guessed. |
+| Finish reads, no start, all too soon after the gun | Flagged for review. |
+| Category | 12 and under is a junior; otherwise adult male or adult female. |
+| Two times | Chip time is the runner's own start to finish; gun time is the gun to their finish. Both are kept for every finisher. |
+| Ranking | Overall places and the award boxes (Adult Male, Adult Female, Juniors) by gun time. Chip time is shown and sent, and `BY_CHIP` ranking is there for age group results. |
 
 `min_elapsed_seconds` is per race and is set when you create it. It exists to
 throw out reads from people standing near the finish arch early on. 720
@@ -331,11 +394,31 @@ import is rejected whole if a bib or an EPC appears twice.
 
 ### Results CSV, out
 
-    place,bib,first_name,last_name,age,gender,start_time,finish_time,elapsed,status
+    place,bib,first_name,last_name,age,gender,start_time,finish_time,elapsed,status,timing,category,gun_time
 
 Finishers first in place order, then everyone else. Times are local ISO 8601
-with the UTC offset attached. `status` is `finished`, `dnf`, `review` or
-`not_started`.
+with the UTC offset attached. `status` is `finished`, `dnf`, `review`,
+`removed` or `not_started`. `place` is overall, by gun time. `elapsed` is
+the chip time and `gun_time` the gun time. `timing` is `chip`, `gun` or
+`manual` (a correction). `category` is `adult_male`, `adult_female` or
+`junior`.
+
+### Adding a missed finisher to RunSignup
+
+RunSignup's dashboard cannot add one in-person finisher to a result set that is
+already published, and uploading again creates a second set.
+`tools/post_runsignup_result.py` posts the single result through RunSignup's
+results API instead. Put the race's API key and secret (Race > Secure Access /
+Info Sharing) in `.env` in the repo root, which git ignores:
+
+    RUNSIGNUP_API_KEY=...
+    RUNSIGNUP_API_SECRET=...
+
+Run it with no arguments to list the bibs that are in `Data/results_adult.csv`
+but not on RunSignup. Then run it with `--bib` to see the request, and add
+`--send` to post it. The API does not move anyone else down a place. Open the
+new row in the results editor, keep "Update impacted places" ticked and save,
+then Recompute Division Placements and Recompute Pace.
 
 ## Running at boot
 
@@ -351,11 +434,13 @@ the Pi.
 
     .venv/bin/python -m pytest
 
-110 tests, a few seconds. They cover the timing rules at their edges (pre-gun
+147 tests, a few seconds. They cover the timing rules at their edges (pre-gun
 reads ignored, burst collapsing, minimum elapsed rejection including a burst
-that straddles the cutoff, dual tag selection, DNF and review), the storage
-layer, the CSV import and export, the web endpoints, EPC decoding from live
-reader reports, and bib assignment, pairing, verify and merge.
+that straddles the cutoff, dual tag selection, gun time fallback, DNF and
+review), the storage layer, the CSV import and export, the web endpoints, the
+tent display, corrections, the RunSignup five minute delay against a stand-in
+client, EPC decoding from live reader reports, and bib assignment, pairing,
+verify and merge.
 
 Two of them matter more than the rest. One checks that live processing and a
 recompute from the read log produce identical results: what the operator reads
@@ -371,12 +456,13 @@ have.
     simulator.py        SimulatedReader, the generated race
     timing.py           the rules, pure functions over a read log
     db.py               per-race SQLite, CSV import and export, recompute
-    app.py              Flask server, live session, the reader thread
+    app.py              Flask server, live session, the reader thread, corrections
+    runsignup.py        the five minute delayed RunSignup uploader
     pair.py             bib to EPC pairing and verify, off the reader
     assign_bibs.py      bib numbers for a registration export, pickup sheet
     merge.py            registration plus pairs.csv into a participant CSV
-    templates/          two pages: the archive and the race console
-    static/             one stylesheet, one script, no CDN, no build step
+    templates/          the archive, the race console and the tent display
+    static/             a stylesheet and a script for each, no CDN, no build step
     tests/              pytest
     run.sh              launcher
     easymoose.service   systemd unit for the Pi

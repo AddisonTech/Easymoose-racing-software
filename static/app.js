@@ -11,7 +11,9 @@
   var POLL_MS = 1000;
 
   var gunUtc = null;
+  var stoppedUtc = null;
   var clockOffsetMs = 0; // server clock minus browser clock
+  var TIMING = { chip: "chip", gun: "gun time", manual: "edited" };
   var lastFinisherCount = 0;
 
   // ----------------------------------------------------------------
@@ -53,7 +55,9 @@
       text(el("clock"), "--:--:--");
       return;
     }
-    var nowServerMs = Date.now() + clockOffsetMs;
+    // A stopped reader stops the clock where it was, instead of letting it
+    // count on after the race is over.
+    var nowServerMs = stoppedUtc !== null ? stoppedUtc / 1000 : Date.now() + clockOffsetMs;
     var elapsed = (nowServerMs - gunUtc / 1000) / 1000;
     if (elapsed < 0) { elapsed = 0; }
     var whole = Math.floor(elapsed);
@@ -69,7 +73,7 @@
   function renderFinishers(rows) {
     var body = el("finishers");
     if (!rows.length) {
-      body.innerHTML = '<tr class="empty-row"><td colspan="4">No finishers yet.</td></tr>';
+      body.innerHTML = '<tr class="empty-row"><td colspan="6">No finishers yet.</td></tr>';
       return;
     }
     var html = "";
@@ -79,7 +83,10 @@
       html += '<tr class="' + fresh + '"><td class="num place">' + (r.place || "") +
         '</td><td class="num">' + escapeHtml(r.bib) +
         '</td><td>' + escapeHtml(r.name) +
-        '</td><td class="num time">' + escapeHtml(r.elapsed) + '</td></tr>';
+        '</td><td class="num time">' + escapeHtml(r.gun) +
+        '</td><td class="num time">' + escapeHtml(r.elapsed) +
+        '</td><td><span class="pill ' + escapeHtml(r.source) + '">' +
+        escapeHtml(TIMING[r.source] || r.source) + '</span></td></tr>';
     }
     body.innerHTML = html;
     lastFinisherCount = rows.length;
@@ -98,14 +105,42 @@
     var html = "";
     for (var i = 0; i < shown.length; i++) {
       var r = shown[i];
-      html += '<tr><td class="num">' + escapeHtml(r.bib) +
+      html += '<tr class="pick" data-index="' + rows.indexOf(r) + '"><td class="num">' + escapeHtml(r.bib) +
         '</td><td>' + escapeHtml(r.name) +
         '</td><td class="num">' + (r.age === null || r.age === undefined ? "" : r.age) +
         '</td><td>' + escapeHtml(r.gender || "") +
         '</td><td><span class="pill ' + r.status + '">' + r.status.replace("_", " ") +
-        '</span></td><td class="num time">' + escapeHtml(r.elapsed || "") + '</td></tr>';
+        '</span>' + (r.corrected ? ' <span class="pill manual">edited</span>' : "") +
+        '</td><td class="num time">' + escapeHtml(r.elapsed || "") + '</td></tr>';
     }
     body.innerHTML = html;
+    participantRows = rows;
+  }
+
+  var participantRows = [];
+
+  function renderRunSignup(rsu) {
+    var line = el("rsu-status");
+    var list = el("rsu-problems");
+    if (!rsu || !rsu.settings.enabled) {
+      line.textContent = "Sending is off.";
+      list.innerHTML = "";
+      return;
+    }
+    if (!rsu.running) {
+      line.textContent = "Sending is on, but the uploader is not running (simulate mode?).";
+    } else if (rsu.checked_utc === undefined) {
+      line.textContent = "Sending is on. First check within 15 seconds.";
+    } else {
+      var next = rsu.next_send_seconds;
+      line.textContent = "Sent " + rsu.sent + ". Waiting " + rsu.waiting +
+        (next !== null && next !== undefined ? ", next in " + formatElapsed(next).replace(/\.\d+$/, "") : "") +
+        "." + (rsu.error ? " Last send failed: " + rsu.error : "");
+    }
+    var problems = rsu.problems || [];
+    var html = "";
+    for (var i = 0; i < problems.length; i++) { html += "<li>" + escapeHtml(problems[i]) + "</li>"; }
+    list.innerHTML = html;
   }
 
   function renderExports(names) {
@@ -148,11 +183,15 @@
   function apply(state) {
     clockOffsetMs = state.server_now_utc / 1000 - Date.now();
     gunUtc = state.race.gun_time_utc;
+    stoppedUtc = state.race.stopped_utc;
+    text(el("clock-label"), stoppedUtc !== null && gunUtc !== null
+      ? "Race clock, stopped with the reader" : "Time since gun");
 
     var s = state.summary;
     text(el("c-registered"), s.registered);
     text(el("c-started"), s.started);
     text(el("c-finished"), s.finished);
+    text(el("c-gun"), s.gun_time);
     text(el("c-course"), s.on_course);
     text(el("c-review"), s.review);
 
@@ -174,6 +213,7 @@
     renderFinishers(state.finishers);
     renderParticipants(state.participants);
     renderExports(state.exports);
+    renderRunSignup(state.runsignup);
 
     var startButton = el("start");
     if (startButton && gunUtc !== null) {
@@ -271,10 +311,74 @@
 
   el("only-unread").addEventListener("change", poll);
 
+  function postJson(url, body) {
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); });
+  }
+
+  var correctionForms = document.querySelectorAll("form.correction");
+  for (var c = 0; c < correctionForms.length; c++) {
+    correctionForms[c].addEventListener("submit", function (event) {
+      event.preventDefault();
+      var form = event.target;
+      var body = { action: form.dataset.action };
+      var fields = form.querySelectorAll("input");
+      for (var f = 0; f < fields.length; f++) { body[fields[f].name] = fields[f].value; }
+      postJson("/api/races/" + encodeURIComponent(slug) + "/corrections", body)
+        .then(function (data) {
+          if (data.ok) {
+            flash(data.message, "good");
+            form.reset();
+          } else {
+            flash(data.error, "bad");
+          }
+          poll();
+        })
+        .catch(function (error) { flash("correction failed: " + error.message, "bad"); });
+    });
+  }
+
+  el("participants").addEventListener("click", function (event) {
+    var row = event.target.closest("tr.pick");
+    if (!row) { return; }
+    var r = participantRows[Number(row.dataset.index)];
+    var form = el("runner-form");
+    form.bib.value = r.bib;
+    form.first_name.value = r.first_name || "";
+    form.last_name.value = r.last_name || "";
+    form.age.value = r.age === null || r.age === undefined ? "" : r.age;
+    form.gender.value = r.gender || "";
+    form.first_name.focus();
+  });
+
+  el("runner-form").addEventListener("submit", function (event) {
+    event.preventDefault();
+    var form = event.target;
+    postJson("/api/races/" + encodeURIComponent(slug) + "/runners/" + encodeURIComponent(form.bib.value.trim()), {
+      first_name: form.first_name.value,
+      last_name: form.last_name.value,
+      age: form.age.value,
+      gender: form.gender.value
+    }).then(function (data) {
+      flash(data.ok ? data.message : data.error, data.ok ? "good" : "bad");
+      if (data.ok) { form.reset(); }
+      poll();
+    }).catch(function (error) { flash("save failed: " + error.message, "bad"); });
+  });
+
   // Messages handed back by the form posts.
   var params = new URLSearchParams(window.location.search);
   if (params.get("error")) { flash(params.get("error"), "bad"); }
   if (params.get("imported")) { flash("Imported " + params.get("imported") + " participants.", "good"); }
+  if (params.get("saved") === "runsignup") { flash("RunSignup settings saved.", "good"); }
+  if (params.get("saved") === "sponsor") {
+    flash("Sponsors updated.", "good");
+    var setupTab = document.querySelector('.tab[data-tab="setup"]');
+    if (setupTab) { setupTab.click(); }
+  }
 
   poll();
   setInterval(poll, POLL_MS);

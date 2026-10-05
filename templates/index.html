@@ -3,12 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Easymoose race timing</title>
+<title>EasyMoose race timing</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
 </head>
 <body>
 <header class="bar">
-  <h1>Easymoose race timing</h1>
+  <h1><img class="bar-logo" src="{{ url_for('static', filename='easymoose-logo.png') }}" alt="">
+    EasyMoose race timing</h1>
   <span class="mode {{ 'sim' if mode == 'simulate' else '' }}">
     {% if mode == 'simulate' %}SIMULATE, no hardware{% else %}reader {{ reader_host }}{% endif %}
   </span>

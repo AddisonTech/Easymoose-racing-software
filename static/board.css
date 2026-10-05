@@ -1,0 +1,257 @@
+/* Timing tent screen. Read from a few metres away, in daylight under a tent:
+   dark background, big tabular numbers, nothing that needs a mouse. */
+
+:root {
+  --bg: #0b0e13;
+  --panel: #151a22;
+  --line: #262e3a;
+  --text: #f2f4f7;
+  --dim: #8b95a5;
+  --accent: #4f9cff;
+  --gold: #f2c94c;
+  --silver: #c9d1dc;
+  --bronze: #d69a5d;
+  --male: #6fb3ff;
+  /* EasyMoose Running Company's neon: the blue moose and the pink ring. */
+  --moose-blue: #2f86e0;
+  --moose-glow: #4090d8;
+  --moose-pink: #e888e0;
+  --female: #ff8fc2;
+  --junior: #7fe0a6;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.top {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 2vw;
+  padding: 1.2vh 2vw;
+}
+/* A neon rule under the header, blue into pink like the logo. */
+.top::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--moose-blue), var(--moose-pink));
+  box-shadow: 0 0 10px rgba(64, 144, 216, 0.6), 0 0 14px rgba(232, 136, 224, 0.35);
+}
+
+/* Sponsor logos scrolling behind the header, dimmed so the race name, the
+   timing sponsor and the clock read clearly on top. */
+.top { overflow: hidden; }
+.top > :not(.sponsor-reel) { position: relative; z-index: 1; }
+.sponsor-reel {
+  position: absolute;
+  inset: 0 0 3px 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.28;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+}
+.reel-track {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  width: max-content;
+  will-change: transform;
+}
+.reel-track img {
+  height: 70%;
+  width: auto;
+  max-width: 22vw;
+  object-fit: contain;
+  margin: 0 3vw;
+}
+.reel-track.rolling { animation: reel var(--reel-seconds, 40s) linear infinite; }
+@keyframes reel {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.brand { display: flex; align-items: center; gap: 1.2vw; min-width: 0; }
+.brand-logo {
+  height: clamp(4.5rem, 12vh, 10rem);
+  width: auto;
+  filter: drop-shadow(0 0 8px rgba(64, 144, 216, 0.45));
+}
+
+.top h1 { margin: 0; font-size: clamp(1.2rem, 2.6vw, 2.8rem); }
+
+.clock-wrap { text-align: right; justify-self: end; }
+
+/* "Timing brought to you by", centred between the race name and the clock. */
+.sponsor {
+  text-align: center;
+  padding: 0.6vh 3vw;
+  /* A soft dark pool so the scrolling logos fade out behind the wordmark. */
+  background: radial-gradient(ellipse closest-side, rgba(11, 14, 19, 0.95) 60%, rgba(11, 14, 19, 0));
+}
+.top h1, .clock-label { text-shadow: 0 0 6px var(--bg), 0 0 14px var(--bg), 0 0 22px var(--bg); }
+.sponsor-label {
+  color: var(--dim);
+  font-size: clamp(0.65rem, 0.8vw, 0.95rem);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  margin-bottom: 0.45em;
+}
+.wordmark { display: inline-flex; flex-direction: column; align-items: center; line-height: 1; }
+.wordmark-name {
+  display: inline-flex;
+  align-items: center;
+  font-size: clamp(1.4rem, 2.4vw, 2.9rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: #f5f7fa;
+}
+.wordmark-o { width: 0.72em; height: 0.72em; margin: 0 0.03em; }
+.wordmark-sub {
+  margin-top: 0.4em;
+  padding-left: 0.45em;
+  font-size: clamp(0.5rem, 0.75vw, 0.9rem);
+  font-weight: 500;
+  letter-spacing: 0.45em;
+  text-transform: uppercase;
+  color: #f5f7fa;
+}
+.clock {
+  font-size: clamp(2rem, 5.5vw, 6rem);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-shadow: 0 0 18px rgba(64, 144, 216, 0.55);
+}
+.clock-label { color: var(--dim); font-size: clamp(0.8rem, 1vw, 1.1rem); text-transform: uppercase; letter-spacing: 0.08em; }
+
+.board {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 1.5vw;
+  padding: 1.5vh 2vw 2vh;
+}
+
+h2 {
+  margin: 0 0 1vh;
+  font-size: clamp(1rem, 1.8vw, 2rem);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+h2 small { color: var(--dim); font-weight: 400; text-transform: none; letter-spacing: 0; }
+.count { color: var(--dim); font-weight: 400; }
+
+/* ---------------------------------------------------------- finish list */
+
+.finish-list {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1.5vh 1.2vw;
+}
+
+/* Finish order, laid out like the console's results table, one table per
+   column. board.js picks the column count and text size so the whole field
+   fits on screen. */
+.columns { flex: 1; min-height: 0; overflow: hidden; display: flex; gap: 1.2em; align-items: flex-start; font-size: 22px; }
+.columns table { flex: 1; min-width: 0; border-collapse: collapse; table-layout: auto; }
+.columns th, .columns td { text-align: left; padding: 0.2em 0.45em; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.columns th { color: var(--dim); font-size: 0.62em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.columns td { color: var(--text); }
+.columns .num { text-align: right; font-variant-numeric: tabular-nums; }
+.columns .place { font-weight: 700; }
+.columns .name { width: 100%; overflow: hidden; text-overflow: ellipsis; max-width: 0; }
+.columns .cat { font-size: 0.62em; font-weight: 700; text-align: center; padding-left: 0; padding-right: 0; }
+.columns td.chip { color: var(--dim); font-size: 0.78em; }
+.box h2 .basis { color: var(--dim); font-size: 0.5em; font-weight: 400; letter-spacing: 0.06em; margin-left: 0.4em; }
+.cat.adult_male { color: var(--male); }
+.cat.adult_female { color: var(--female); }
+.cat.junior { color: var(--junior); }
+
+.columns tr.fresh td { animation: arrive 6s ease-out var(--fresh-delay, 0ms); }
+@keyframes arrive {
+  0%, 30% { background: #1f4f8a; }
+  100% { background: transparent; }
+}
+
+.empty { color: var(--dim); margin: 0.5em 0.2em; }
+
+/* -------------------------------------------------------- category boxes */
+
+.leaders {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: repeat(3, 1fr);
+  gap: 1.5vh;
+}
+
+.box {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-top: 5px solid var(--accent);
+  border-radius: 10px;
+  padding: 1.2vh 1.2vw;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.box[data-category="adult_male"] { border-top-color: var(--male); }
+.box[data-category="adult_female"] { border-top-color: var(--female); }
+.box[data-category="junior"] { border-top-color: var(--junior); }
+
+.podium { list-style: none; margin: 0; padding: 0; flex: 1; display: flex; flex-direction: column; justify-content: space-around; }
+.podium li {
+  display: grid;
+  grid-template-columns: 1.6em 1fr auto;
+  gap: 1vw;
+  align-items: baseline;
+  font-size: clamp(1rem, 1.9vw, 2.3rem);
+}
+.podium .rank { font-weight: 800; text-align: center; }
+.podium li:nth-child(1) .rank { color: var(--gold); }
+.podium li:nth-child(2) .rank { color: var(--silver); }
+.podium li:nth-child(3) .rank { color: var(--bronze); }
+.podium .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.podium .name small { color: var(--dim); font-size: 0.6em; }
+.podium .time { font-weight: 700; font-variant-numeric: tabular-nums; }
+.podium .open { color: var(--dim); }
+
+.offline {
+  position: fixed;
+  bottom: 1vh;
+  right: 1vw;
+  background: #6b2c2c;
+  padding: 0.5em 1em;
+  border-radius: 6px;
+}
+
+/* A portrait or small screen stacks the two halves. */
+@media (max-width: 900px) {
+  body { overflow: auto; }
+  .board { grid-template-columns: 1fr; }
+  .leaders { grid-template-rows: none; }
+  .columns { overflow: visible; flex-direction: column; }
+  .columns table { width: 100%; }
+}

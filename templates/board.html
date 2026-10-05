@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ race.name }} — Results</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='board.css') }}">
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
+</head>
+<body data-slug="{{ slug }}">
+<header class="top">
+  <div id="sponsor-reel" class="sponsor-reel" aria-hidden="true"><div class="reel-track"></div></div>
+  <div class="brand">
+    <img class="brand-logo" src="{{ url_for('static', filename='easymoose-logo.png') }}"
+         alt="EasyMoose Running Company">
+    <h1>{{ race.name }}</h1>
+  </div>
+  {% include "sponsor.html" %}
+  <div class="clock-wrap">
+    <div id="clock" class="clock">--:--:--</div>
+    <div id="clock-label" class="clock-label">waiting for the start</div>
+  </div>
+</header>
+
+<main class="board">
+  <section class="finish-list">
+    <h2>Finishers <span id="count" class="count"></span></h2>
+    <div id="finishers" class="columns"><p class="empty">No finishers yet.</p></div>
+  </section>
+
+  <section class="leaders">
+    <div class="box" data-category="adult_male">
+      <h2>Adult Male <span class="basis">gun time</span></h2>
+      <ol class="podium"></ol>
+    </div>
+    <div class="box" data-category="adult_female">
+      <h2>Adult Female <span class="basis">gun time</span></h2>
+      <ol class="podium"></ol>
+    </div>
+    <div class="box" data-category="junior">
+      <h2>Juniors <small>12 &amp; under</small> <span class="basis">gun time</span></h2>
+      <ol class="podium"></ol>
+    </div>
+  </section>
+</main>
+
+<div id="offline" class="offline" hidden>Reconnecting&hellip;</div>
+
+<script src="{{ url_for('static', filename='board.js') }}"></script>
+</body>
+</html>

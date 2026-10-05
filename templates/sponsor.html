@@ -1,0 +1,22 @@
+{#- The "Timing brought to you by" block in the middle of the tent display header.
+    Swap this file to change the sponsor. Sixophor Software's wordmark: "Six",
+    a particle ring for the O, "phor", with SOFTWARE spaced out underneath,
+    in the brand cyan (#22D3EE). -#}
+{%- set ring = [
+  (25, 0, 2.9, 1), (23.8, 7.7, 2.4, 0.9), (20.2, 14.7, 2.8, 1), (14.7, 20.2, 2.3, 0.95),
+  (7.7, 23.8, 2.9, 1), (0, 25, 2.4, 0.9), (-7.7, 23.8, 2.8, 1), (-14.7, 20.2, 2.3, 0.95),
+  (-20.2, 14.7, 2.9, 1), (-23.8, 7.7, 2.4, 0.9), (-25, 0, 2.8, 1), (-23.8, -7.7, 2.3, 0.95),
+  (-20.2, -14.7, 2.9, 1), (-14.7, -20.2, 2.4, 0.9), (-7.7, -23.8, 2.8, 1), (0, -25, 2.3, 0.9),
+  (7.7, -23.8, 2.9, 1), (14.7, -20.2, 2.4, 0.95), (20.2, -14.7, 2.8, 1), (23.8, -7.7, 2.3, 0.9),
+] %}
+<div class="sponsor">
+  <div class="sponsor-label">Timing brought to you by</div>
+  <div class="wordmark" aria-label="Sixophor Software">
+    <span class="wordmark-name">Six<svg class="wordmark-o" viewBox="-30 -30 60 60" aria-hidden="true">
+      {%- for cx, cy, r, o in ring %}<circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r }}" fill="#22D3EE" opacity="{{ o }}"/>{% endfor -%}
+      <circle cx="17.7" cy="-17.7" r="6.5" fill="#0B0D12" stroke="#22D3EE" stroke-width="3"/>
+      <circle cx="17.7" cy="-17.7" r="2.4" fill="#22D3EE"/>
+    </svg>phor</span>
+    <span class="wordmark-sub">Software</span>
+  </div>
+</div>

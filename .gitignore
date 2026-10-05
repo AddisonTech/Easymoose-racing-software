@@ -12,3 +12,5 @@ races/*
 pairs.csv
 # Copies of Data/ taken before re-running assign_bibs.py hold the same runner data.
 [Dd][Aa][Tt][Aa]_[Bb][Aa][Cc][Kk][Uu][Pp]*/
+# RunSignup API key and secret for tools/post_runsignup_result.py. Never commit.
+.env

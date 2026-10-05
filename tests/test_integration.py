@@ -65,8 +65,10 @@ def test_the_generated_race_produces_the_results_it_planted(sim_race):
     by_bib = {r.bib: r for r in results}
     for bib in sim.expected_dnf_bibs:
         assert by_bib[bib].status == "dnf", f"bib {bib} should be a DNF"
-    for bib in sim.expected_review_bibs:
-        assert by_bib[bib].status == "review", f"bib {bib} should need review"
+    for bib in sim.expected_gun_time_bibs:
+        assert by_bib[bib].status == "finished", f"bib {bib} should finish on gun time"
+        assert by_bib[bib].source == "gun", f"bib {bib} should be timed from the gun"
+        assert by_bib[bib].start_utc is None
 
     # Nobody finishes in under the minimum elapsed, and nobody takes all day.
     finished = [r for r in results if r.status == STATUS_FINISHED]
@@ -93,7 +95,7 @@ def test_every_non_finisher_is_explained_by_the_read_log(sim_race):
     for item in reads:
         by_epc.setdefault(item.epc, []).append(item)
 
-    planted = set(sim.expected_dnf_bibs) | set(sim.expected_review_bibs)
+    planted = set(sim.expected_dnf_bibs) | set(sim.expected_gun_time_bibs)
     for result, person in zip(results, people):
         if result.status == STATUS_FINISHED or result.bib in planted:
             continue

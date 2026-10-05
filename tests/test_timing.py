@@ -25,6 +25,9 @@ from timing import (
     STATUS_FINISHED,
     STATUS_NOT_STARTED,
     STATUS_REVIEW,
+    SOURCE_CHIP,
+    SOURCE_GUN,
+    BY_CHIP,
     Participant,
     collapse_bursts,
     compute_result,
@@ -166,12 +169,35 @@ def test_start_without_finish_is_dnf():
     assert result.elapsed_seconds is None
 
 
-def test_finish_without_start_goes_to_review_and_is_not_guessed():
+def test_finish_without_start_is_timed_from_the_gun():
+    # A packed start hides tags from the start antennas. The runner still ran.
     result = result_for(ONE, burst(TAG_A, FINISH_PORT, 1500.0))
-    assert result.status == STATUS_REVIEW
+    assert result.status == STATUS_FINISHED
+    assert result.source == SOURCE_GUN
     assert result.start_utc is None
-    assert result.elapsed_seconds is None
+    assert result.elapsed_seconds == 1500.0
     assert result.finish_utc == at(1500.0)
+
+
+def test_a_chip_finish_says_so():
+    result = result_for(ONE, burst(TAG_A, START_PORT, 3.0) + burst(TAG_A, FINISH_PORT, 1500.0))
+    assert result.source == SOURCE_CHIP
+    assert result.elapsed_seconds == 1497.0
+
+
+def test_finish_reads_too_soon_after_the_gun_with_no_start_go_to_review():
+    # Someone by the arch ten minutes in, with no start read: not a finish.
+    result = result_for(ONE, burst(TAG_A, FINISH_PORT, 600.0))
+    assert result.status == STATUS_REVIEW
+    assert result.elapsed_seconds is None
+    assert result.finish_utc == at(600.0)
+
+
+def test_gun_time_fallback_still_honours_the_minimum_elapsed():
+    reads = burst(TAG_A, FINISH_PORT, 600.0) + burst(TAG_A, FINISH_PORT, 1700.0)
+    result = result_for(ONE, reads)
+    assert result.source == SOURCE_GUN
+    assert result.elapsed_seconds == 1700.0
 
 
 def test_a_tag_never_seen_at_all_is_not_started():
@@ -204,16 +230,21 @@ def test_format_elapsed_switches_to_hours_only_when_needed():
 # ----------------------------------------------------------- field results
 
 
-def test_places_follow_elapsed_time_not_finish_order():
-    # The back marker started late and ran faster, so they win on net time
-    # even though they crossed the line second.
-    fast = Participant(1, "101", (TAG_A,))
-    slow = Participant(2, "102", (TAG_B,))
+def test_overall_places_go_by_gun_time_and_age_groups_by_chip_time():
+    # The back marker started late and ran faster on chip time, but crossed
+    # the line second. Overall awards go by gun time, so the first across the
+    # line is first overall; age group results go by chip time.
+    first_across = Participant(1, "101", (TAG_A,))
+    back_marker = Participant(2, "102", (TAG_B,))
     reads = burst(TAG_A, START_PORT, 0.0) + burst(TAG_A, FINISH_PORT, 1500.0)
     reads += burst(TAG_B, START_PORT, 200.0) + burst(TAG_B, FINISH_PORT, 1600.0)
-    results = compute_results(reads, [fast, slow], GUN)
-    assert places(results) == {2: 1, 1: 2}
-    assert [r.bib for r in order_finishers(results)] == ["102", "101"]
+    results = compute_results(reads, [first_across, back_marker], GUN)
+    assert [(r.bib, r.gun_seconds, r.elapsed_seconds) for r in results] == [
+        ("101", 1500.0, 1500.0), ("102", 1600.0, 1400.0)]
+    assert places(results) == {1: 1, 2: 2}
+    assert [r.bib for r in order_finishers(results)] == ["101", "102"]
+    assert places(results, BY_CHIP) == {2: 1, 1: 2}
+    assert [r.bib for r in order_finishers(results, BY_CHIP)] == ["102", "101"]
 
 
 def test_summary_counts_add_up():
@@ -228,6 +259,7 @@ def test_summary_counts_add_up():
         "started": 2,
         "finished": 1,
         "on_course": 1,
+        "gun_time": 0,
         "review": 0,
         "not_started": 1,
     }

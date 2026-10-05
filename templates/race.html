@@ -3,13 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ race.name }} — Easymoose</title>
+<title>{{ race.name }} — EasyMoose</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
 </head>
 <body data-slug="{{ slug }}" data-live="{{ 'yes' if live else 'no' }}">
 <header class="bar">
-  <h1><a href="{{ url_for('index') }}" class="back">&larr;</a> {{ race.name }}</h1>
+  <h1><a href="{{ url_for('index') }}" class="back">&larr;</a>
+    <img class="bar-logo" src="{{ url_for('static', filename='easymoose-logo.png') }}" alt="EasyMoose">
+    {{ race.name }}</h1>
   <span class="sub">{{ race.date }}{% if race.distance %} &middot; {{ race.distance }}{% endif %}</span>
+  <a class="board-link" href="{{ url_for('board', slug=slug) }}" target="_blank" rel="noopener">Tent display &#8599;</a>
   <span class="mode {{ 'sim' if mode == 'simulate' else '' }}">
     {% if mode == 'simulate' %}SIMULATE{% else %}reader{% endif %}
   </span>
@@ -19,7 +23,7 @@
 
 <section class="console">
   <div class="clock-box">
-    <div class="label">Time since gun</div>
+    <div id="clock-label" class="label">Time since gun</div>
     <div id="clock" class="clock">--:--:--</div>
     <div id="reader-line" class="label">reader not attached</div>
     <div id="clock-warning" class="clock-warning" hidden></div>
@@ -29,6 +33,7 @@
     <div class="count"><span id="c-registered">0</span><label>registered</label></div>
     <div class="count"><span id="c-started">0</span><label>started</label></div>
     <div class="count"><span id="c-finished">0</span><label>finished</label></div>
+    <div class="count"><span id="c-gun">0</span><label>gun time</label></div>
     <div class="count"><span id="c-course">0</span><label>on course</label></div>
     <div class="count warn"><span id="c-review">0</span><label>review</label></div>
   </div>
@@ -64,17 +69,53 @@
 
 <main>
   <section id="tab-results" class="tab-panel">
+    <div class="panel corrections">
+      <h2>Corrections</h2>
+      <p class="label">The tent display changes at once. RunSignup gets a result after it has
+        gone five minutes without changing.</p>
+      <form class="grid correction" data-action="set_time">
+        <label>Bib<input name="bib" size="5" required></label>
+        <label>Chip time<input name="time" size="10" placeholder="46:31.19" required></label>
+        <button class="primary">Set time</button>
+        <small>For a wrong time, or a runner the reader missed.</small>
+      </form>
+      <form class="grid correction" data-action="swap">
+        <label>Bib<input name="bib" size="5" required></label>
+        <label>with bib<input name="other_bib" size="5" required></label>
+        <button>Swap times</button>
+        <small>Two runners wearing each other's bibs.</small>
+      </form>
+      <form class="grid correction" data-action="remove">
+        <label>Bib<input name="bib" size="5" required></label>
+        <button class="danger">Remove</button>
+        <small>Not a real finish.</small>
+      </form>
+      <form class="grid correction" data-action="clear">
+        <label>Bib<input name="bib" size="5" required></label>
+        <button>Undo correction</button>
+        <small>Back to the time from the reads.</small>
+      </form>
+    </div>
     <table class="results">
       <thead>
-        <tr><th class="num">Place</th><th class="num">Bib</th><th>Name</th><th class="num">Elapsed</th></tr>
+        <tr><th class="num">Place</th><th class="num">Bib</th><th>Name</th><th class="num">Gun</th><th class="num">Chip</th><th>Timing</th></tr>
       </thead>
       <tbody id="finishers">
-        <tr class="empty-row"><td colspan="4">No finishers yet.</td></tr>
+        <tr class="empty-row"><td colspan="6">No finishers yet.</td></tr>
       </tbody>
     </table>
   </section>
 
   <section id="tab-participants" class="tab-panel" hidden>
+    <form id="runner-form" class="panel grid">
+      <label>Bib<input name="bib" size="5" required></label>
+      <label>First name<input name="first_name"></label>
+      <label>Last name<input name="last_name"></label>
+      <label>Age<input name="age" size="4"></label>
+      <label>Gender<input name="gender" size="3" placeholder="M/F"></label>
+      <button class="primary">Save runner</button>
+      <small>Click a runner below to fill this in. Age 12 and under shows as a junior.</small>
+    </form>
     <label class="filter">
       <input type="checkbox" id="only-unread"> show only runners not yet read at the start
     </label>
@@ -107,6 +148,46 @@
         <tr><th>Status</th><td>{{ race.status }}</td></tr>
         <tr><th>Folder</th><td><code>{{ race.directory }}</code></td></tr>
       </table>
+    </div>
+    <div class="panel">
+      <h2>Sponsors</h2>
+      <p class="label">Logos scroll behind the header of the tent display. PNG, JPG, GIF or
+        WebP, up to 5 MB. A wide logo on a transparent background looks best.</p>
+      <ul class="sponsor-list">
+        {% for sponsor in sponsors %}
+        <li>
+          <img src="{{ url_for('sponsor_logo', slug=slug, filename=sponsor.file) }}" alt="">
+          <span>{{ sponsor.name }}</span>
+          <form method="post" action="{{ url_for('remove_sponsor', slug=slug, sponsor_id=sponsor.id) }}" class="inline">
+            <button class="danger">Remove</button>
+          </form>
+        </li>
+        {% else %}
+        <li class="label">No sponsors yet.</li>
+        {% endfor %}
+      </ul>
+      <form method="post" action="{{ url_for('add_sponsor', slug=slug) }}" enctype="multipart/form-data" class="grid">
+        <label>Sponsor name<input name="name" placeholder="optional"></label>
+        <label>Logo<input type="file" name="logo" accept="image/png,image/jpeg,image/gif,image/webp" required></label>
+        <button class="primary">Add sponsor</button>
+      </form>
+    </div>
+    <div class="panel">
+      <h2>RunSignup</h2>
+      <p class="label">Results are sent five minutes after they stop changing: juniors (12 and
+        under) to the junior set, everyone else to the adult set. Key and secret go in
+        <code>.env</code>. Never sent in simulate mode.</p>
+      <form method="post" action="{{ url_for('runsignup_settings', slug=slug) }}" class="grid">
+        <label>Race ID<input name="race_id" size="8" value="{{ runsignup.race_id or '' }}"></label>
+        <label>Adult event ID<input name="adult_event_id" size="8" value="{{ runsignup.adult_event_id or '' }}"></label>
+        <label>Adult result set ID<input name="adult_result_set_id" size="8" value="{{ runsignup.adult_result_set_id or '' }}"></label>
+        <label>Junior event ID<input name="junior_event_id" size="8" value="{{ runsignup.junior_event_id or '' }}"></label>
+        <label>Junior result set ID<input name="junior_result_set_id" size="8" value="{{ runsignup.junior_result_set_id or '' }}"></label>
+        <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if runsignup.enabled }}> Send results</label>
+        <button class="primary">Save</button>
+      </form>
+      <p id="rsu-status" class="label"></p>
+      <ul id="rsu-problems" class="problems"></ul>
     </div>
     <div class="panel">
       <h2>Exports</h2>

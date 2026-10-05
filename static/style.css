@@ -212,3 +212,19 @@ tr.fresh { animation: highlight 2.5s ease-out; }
   .controls { margin-left: 0; width: 100%; }
   .count span { font-size: 1.5rem; }
 }
+
+.board-link { margin-left: auto; text-decoration: none; }
+.pill.gun { color: #ffd479; border-color: #6b551c; }
+.pill.manual { color: #b9a4ff; border-color: #4b3c7a; }
+.pill.chip { color: var(--dim); }
+.corrections form { margin-bottom: 0.6rem; }
+.grid .check { flex-direction: row; align-items: center; gap: 0.4rem; }
+tr.pick { cursor: pointer; }
+tr.pick:hover td { background: #1c232d; }
+.problems { margin: 0.4rem 0 0; padding-left: 1.2rem; color: var(--warn); }
+.board-link + .mode { margin-left: 0; }
+.bar-logo { height: 1.9rem; width: auto; vertical-align: middle; margin-right: 0.35rem; }
+.sponsor-list { list-style: none; padding: 0; margin: 0 0 0.9rem; }
+.sponsor-list li { display: flex; align-items: center; gap: 0.8rem; padding: 0.35rem 0; border-bottom: 1px solid var(--line); }
+.sponsor-list img { height: 2.4rem; width: 6rem; object-fit: contain; background: #0b0e13; border-radius: 4px; }
+.sponsor-list span { flex: 1; }

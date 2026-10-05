@@ -323,7 +323,8 @@ class SimulatedReader(Reader):
         return [p.person.bib for p in self._plans if p.dnf]
 
     @property
-    def expected_review_bibs(self) -> list[str]:
+    def expected_gun_time_bibs(self) -> list[str]:
+        """Finishers whose start read was withheld: timed from the gun."""
         return [p.person.bib for p in self._plans if p.missed_start and not p.dnf]
 
     def trigger_start(self, gun_utc: int) -> None:

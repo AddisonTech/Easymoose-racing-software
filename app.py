@@ -14,13 +14,20 @@ every read straight to SQLite, and recomputes results from its own in memory
 copy of the read log. Flask request threads never touch that list; they ask
 for a snapshot under a lock and get a plain dict back. Exports read the
 database through a separate connection, so pressing EXPORT during the race
-cannot stall the reads.
+cannot stall the reads. The RunSignup uploader is a third thread that only
+reads results and talks to the network, so a dead connection at the finish
+line never reaches the read loop.
+
+Two pages per race: the console at /races/<slug> for the operator, and the
+board at /races/<slug>/board for the screen at the timing tent. The board has
+no controls at all.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import re
 import threading
 import time
 from pathlib import Path
@@ -37,13 +44,20 @@ from flask import (
 )
 
 import db as racedb
+import runsignup
 from db import RACES_ROOT, ParticipantImportError, RaceDB
 from reader import ALL_ANTENNAS, LLRP_DEFAULT_PORT, LLRPReader, Reader
 from simulator import SimulatedReader, participants_from_rows
 from timing import (
+    CATEGORIES,
     STATUS_FINISHED,
+    Adjustment,
+    apply_adjustments,
+    category,
     compute_results,
     format_elapsed,
+    order_finishers,
+    parse_elapsed,
     places,
     summarize,
 )
@@ -152,11 +166,15 @@ class LiveSession:
             self._dirty = False
 
         info = self.race.info()
-        results = compute_results(
-            reads,
-            self.race.participants(),
+        results = apply_adjustments(
+            compute_results(
+                reads,
+                self.race.participants(),
+                info.effective_gun_time_utc,
+                info.min_elapsed_seconds,
+            ),
+            self.race.adjustments(),
             info.effective_gun_time_utc,
-            info.min_elapsed_seconds,
         )
         with self._lock:
             self._results = results
@@ -195,6 +213,12 @@ class LiveSession:
         with self._lock:
             return list(self._results), self._read_count, self._last_read_utc, self._error
 
+    def corrected(self) -> None:
+        """An operator correction was saved: show it now, not at the next read."""
+        with self._lock:
+            self._dirty = True
+        self._refresh(persist=True)
+
     def persist(self) -> list:
         """Force results to disk and return them. Used before an export."""
         self._refresh(persist=True)
@@ -223,6 +247,7 @@ class Console:
         self.sim_seed = sim_seed
         self.sim_clock_skew = sim_clock_skew
         self.session: LiveSession | None = None
+        self.uploader: runsignup.Uploader | None = None
         self._lock = threading.Lock()
 
     @property
@@ -265,6 +290,7 @@ class Console:
                 )
             race = self.open_race(slug)
             session = LiveSession(race, self.build_reader(race), self.mode)
+            race.set_stopped(None)
             self.session = session
             return session
 
@@ -273,12 +299,83 @@ class Console:
             if self.session is None:
                 return
             self.session.stop()
+            self.session.race.set_stopped(now_utc())
             self.session.race.set_status(racedb.STATUS_FINISHED)
             self.session = None
 
     def session_for(self, slug: str) -> LiveSession | None:
         session = self.session
         return session if session is not None and session.slug == slug else None
+
+    def current_results(self, race: RaceDB) -> list:
+        """The live picture if this race is attached, otherwise what is stored."""
+        session = self.session_for(race.directory.name)
+        if session is not None:
+            return session.snapshot()[0]
+        return race.results()
+
+
+class CorrectionError(ValueError):
+    """A correction the operator asked for that cannot be made."""
+
+
+def correct(race: RaceDB, results: list, action: str, bib: str, other_bib: str = "",
+            time_text: str = "") -> str:
+    """Save one operator correction and return what was done, for the screen.
+
+    set_time  bib's chip time becomes time_text. Their finish crossing is put
+              that long after their start read, or after the gun if they
+              have none, so the finish order and the gun time follow.
+    swap      bib and other_bib exchange results: their tags were swapped.
+    remove    bib is taken out of the results.
+    clear     bib's correction is dropped and the reads decide again.
+    """
+    info = race.info()
+    gun = info.effective_gun_time_utc
+    by_id = {r.participant_id: r for r in results}
+
+    def lookup(text: str) -> int:
+        participant_id = race.participant_id_for_bib(text)
+        if participant_id is None:
+            raise CorrectionError(f"no runner with bib {text.strip() or '(blank)'}")
+        return participant_id
+
+    first = lookup(bib)
+    stamp = now_utc()
+    if action == "clear":
+        if not race.clear_adjustment(first):
+            raise CorrectionError(f"bib {bib} has no correction to clear")
+        return f"Bib {bib}: correction cleared, timed from the reads again."
+    if action == "remove":
+        race.set_adjustments([Adjustment(first, Adjustment.REMOVED)], stamp)
+        return f"Bib {bib} removed from the results."
+    if gun is None:
+        raise CorrectionError("the race has not started")
+    if action == "set_time":
+        try:
+            elapsed = parse_elapsed(time_text)
+        except ValueError as exc:
+            raise CorrectionError(str(exc)) from None
+        current = by_id.get(first)
+        origin = current.start_utc if current is not None and current.start_utc else gun
+        finish = origin + int(round(elapsed * MICROS))
+        race.set_adjustments([Adjustment(first, Adjustment.TIME, elapsed, finish)], stamp)
+        return f"Bib {bib} set to {format_elapsed(elapsed)}."
+    if action == "swap":
+        second = lookup(other_bib)
+        if second == first:
+            raise CorrectionError("pick two different bibs to swap")
+        a, b = by_id.get(first), by_id.get(second)
+        for result, label in ((a, bib), (b, other_bib)):
+            if result is None or result.status != STATUS_FINISHED:
+                raise CorrectionError(f"bib {label} has no finish time to swap")
+        race.set_adjustments([
+            Adjustment(first, Adjustment.TIME, b.elapsed_seconds, b.finish_utc),
+            Adjustment(second, Adjustment.TIME, a.elapsed_seconds, a.finish_utc),
+        ], stamp)
+        return (f"Swapped: bib {bib} now {format_elapsed(b.elapsed_seconds)}, "
+                f"bib {other_bib} now {format_elapsed(a.elapsed_seconds)}.")
+    raise CorrectionError(f"unknown correction {action!r}")
 
 
 # ----------------------------------------------------------------------
@@ -307,6 +404,7 @@ def build_state(race: RaceDB, session: LiveSession | None) -> dict:
     details = race.participant_details()
     place_by_participant = places(results)
     seen = race.seen_epcs() if session is None else None
+    corrected = set(race.adjustments())
 
     finishers = [
         {
@@ -315,7 +413,11 @@ def build_state(race: RaceDB, session: LiveSession | None) -> dict:
             "name": _full_name(details.get(r.participant_id, {})),
             "elapsed": format_elapsed(r.elapsed_seconds),
             "elapsed_seconds": r.elapsed_seconds,
+            "gun": format_elapsed(r.gun_seconds),
             "finish_utc": r.finish_utc,
+            "source": r.source,
+            "category": category(details.get(r.participant_id, {}).get("age"),
+                                 details.get(r.participant_id, {}).get("gender")),
         }
         for r in results
         if r.status == STATUS_FINISHED
@@ -327,6 +429,8 @@ def build_state(race: RaceDB, session: LiveSession | None) -> dict:
         {
             "bib": r.bib,
             "name": _full_name(details.get(r.participant_id, {})),
+            "first_name": details.get(r.participant_id, {}).get("first_name", ""),
+            "last_name": details.get(r.participant_id, {}).get("last_name", ""),
             "age": details.get(r.participant_id, {}).get("age"),
             "gender": details.get(r.participant_id, {}).get("gender", ""),
             "status": r.status,
@@ -334,6 +438,8 @@ def build_state(race: RaceDB, session: LiveSession | None) -> dict:
             "start": racedb.format_clock(r.start_utc),
             "finish": racedb.format_clock(r.finish_utc),
             "elapsed": format_elapsed(r.elapsed_seconds),
+            "source": r.source if r.elapsed_seconds is not None else "",
+            "corrected": r.participant_id in corrected,
         }
         for r in results
     ]
@@ -344,6 +450,8 @@ def build_state(race: RaceDB, session: LiveSession | None) -> dict:
             {
                 "bib": person["bib"],
                 "name": _full_name(person),
+                "first_name": person.get("first_name", ""),
+                "last_name": person.get("last_name", ""),
                 "age": person.get("age"),
                 "gender": person.get("gender", ""),
                 "status": "not_started",
@@ -351,6 +459,8 @@ def build_state(race: RaceDB, session: LiveSession | None) -> dict:
                 "start": "",
                 "finish": "",
                 "elapsed": "",
+                "source": "",
+                "corrected": False,
             }
             for person in sorted(
                 details.values(),
@@ -367,6 +477,7 @@ def build_state(race: RaceDB, session: LiveSession | None) -> dict:
             "status": info.status,
             "gun_time_utc": info.gun_time_utc,
             "gun_time_reader_utc": info.gun_time_reader_utc,
+            "stopped_utc": info.stopped_utc,
             "min_elapsed_seconds": info.min_elapsed_seconds,
         },
         "live": session is not None,
@@ -391,6 +502,7 @@ def build_state(race: RaceDB, session: LiveSession | None) -> dict:
             "started": 0,
             "finished": 0,
             "on_course": 0,
+            "gun_time": 0,
             "review": 0,
             "not_started": len(details),
         },
@@ -399,6 +511,82 @@ def build_state(race: RaceDB, session: LiveSession | None) -> dict:
         "unseen_epcs": None if seen is None else len(seen),
         "server_now_utc": now_utc(),
         "exports": [path.name for path in race.exports()],
+    }
+
+
+BOARD_LEADERS = 3
+
+# Sponsor logos: raster images only. SVG can carry script, and these are
+# served from the same origin as the console.
+SPONSOR_TYPES = {
+    ".png": (b"\x89PNG",),
+    ".jpg": (b"\xff\xd8\xff",),
+    ".jpeg": (b"\xff\xd8\xff",),
+    ".gif": (b"GIF87a", b"GIF89a"),
+    ".webp": (b"RIFF",),
+}
+SPONSOR_MAX_BYTES = 5 * 1024 * 1024
+SPONSOR_FILE = re.compile(r"^\d+\.(png|jpg|jpeg|gif|webp)$")
+
+
+def sponsor_image_ext(filename: str, image: bytes) -> str:
+    """The extension to store an uploaded logo under, or ValueError."""
+    ext = Path(filename or "").suffix.lower()
+    signatures = SPONSOR_TYPES.get(ext)
+    if signatures is None:
+        raise ValueError("logo must be a PNG, JPG, GIF or WebP image")
+    if len(image) > SPONSOR_MAX_BYTES:
+        raise ValueError("logo is over 5 MB")
+    if not image.startswith(signatures) or (ext == ".webp" and image[8:12] != b"WEBP"):
+        raise ValueError(f"that file is not really a {ext[1:].upper()} image")
+    return ".jpg" if ext == ".jpeg" else ext
+
+
+def build_board(race: RaceDB, results: list) -> dict:
+    """What the timing tent screen shows.
+
+    Every finisher in the order they crossed, which is gun time order, with
+    the overall place by gun time, the gun time, and the chip time. The three
+    award boxes rank by gun time.
+    """
+    info = race.info()
+    details = race.participant_details()
+    place_by_participant = places(results)
+
+    def row(r) -> dict:
+        person = details.get(r.participant_id, {})
+        return {
+            "place": place_by_participant.get(r.participant_id),
+            "bib": r.bib,
+            "name": _full_name(person),
+            "time": format_elapsed(r.gun_seconds),
+            "chip": format_elapsed(r.elapsed_seconds),
+            "category": category(person.get("age"), person.get("gender")),
+            "finish_utc": r.finish_utc,
+        }
+
+    ranked = order_finishers(r for r in results if r.status == STATUS_FINISHED)
+    leaders = {name: [] for name in CATEGORIES}
+    for r in ranked:
+        entry = row(r)
+        rows = leaders.get(entry["category"])
+        if rows is not None and len(rows) < BOARD_LEADERS:
+            rows.append(entry)
+
+    return {
+        "race": {
+            "name": info.name,
+            "gun_time_utc": info.gun_time_utc,
+            "stopped_utc": info.stopped_utc,
+        },
+        "finishers": [row(r) for r in ranked],
+        "leaders": leaders,
+        "sponsors": [
+            {"id": s["id"], "name": s["name"],
+             "url": f"/races/{info.slug}/sponsors/{s['file']}"}
+            for s in race.sponsors()
+        ],
+        "server_now_utc": now_utc(),
     }
 
 
@@ -449,6 +637,8 @@ def create_app(console: Console) -> Flask:
             other_race_live=console.session is not None and console.session.slug != slug,
             live_slug=console.session.slug if console.session else None,
             mode=console.mode,
+            runsignup=race.runsignup_settings(),
+            sponsors=race.sponsors(),
         )
 
     @app.post("/races/<slug>/participants")
@@ -506,7 +696,115 @@ def create_app(console: Console) -> Flask:
     @app.get("/api/races/<slug>/state")
     def race_state(slug):
         race = console.open_race(slug)
-        return jsonify(build_state(race, console.session_for(slug)))
+        state = build_state(race, console.session_for(slug))
+        state["runsignup"] = runsignup.status_for(race, console.uploader)
+        return jsonify(state)
+
+    @app.get("/races/<slug>/board")
+    def board(slug):
+        race = console.open_race(slug)
+        return render_template("board.html", race=race.info(), slug=slug)
+
+    @app.get("/api/races/<slug>/board")
+    def board_state(slug):
+        race = console.open_race(slug)
+        return jsonify(build_board(race, console.current_results(race)))
+
+    @app.post("/api/races/<slug>/corrections")
+    def corrections(slug):
+        race = console.open_race(slug)
+        body = request.get_json(silent=True) or {}
+        try:
+            message = correct(
+                race,
+                console.current_results(race),
+                str(body.get("action") or ""),
+                str(body.get("bib") or ""),
+                str(body.get("other_bib") or ""),
+                str(body.get("time") or ""),
+            )
+        except CorrectionError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        refresh(race)
+        return jsonify({"ok": True, "message": message})
+
+    @app.post("/api/races/<slug>/runners/<bib>")
+    def edit_runner(slug, bib):
+        race = console.open_race(slug)
+        participant_id = race.participant_id_for_bib(bib)
+        if participant_id is None:
+            return jsonify({"ok": False, "error": f"no runner with bib {bib}"}), 404
+        body = request.get_json(silent=True) or {}
+        age_text = str(body.get("age") or "").strip()
+        if age_text and not age_text.isdigit():
+            return jsonify({"ok": False, "error": "age must be a whole number"}), 400
+        race.update_participant(
+            participant_id,
+            str(body.get("first_name") or "").strip(),
+            str(body.get("last_name") or "").strip(),
+            int(age_text) if age_text else None,
+            str(body.get("gender") or "").strip().upper()[:1],
+        )
+        refresh(race)
+        return jsonify({"ok": True, "message": f"Bib {bib} updated."})
+
+    @app.post("/races/<slug>/sponsors")
+    def add_sponsor(slug):
+        race = console.open_race(slug)
+        upload = request.files.get("logo")
+        name = (request.form.get("name") or "").strip()
+        back = url_for("race_console", slug=slug)
+        if upload is None or not upload.filename:
+            return redirect(back + "?error=choose a logo image")
+        image = upload.read(SPONSOR_MAX_BYTES + 1)
+        try:
+            ext = sponsor_image_ext(upload.filename, image)
+        except ValueError as exc:
+            return redirect(back + f"?error={exc}")
+        race.add_sponsor(name or Path(upload.filename).stem, ext, image)
+        return redirect(back + "?saved=sponsor")
+
+    @app.post("/races/<slug>/sponsors/<int:sponsor_id>/delete")
+    def remove_sponsor(slug, sponsor_id):
+        race = console.open_race(slug)
+        race.remove_sponsor(sponsor_id)
+        return redirect(url_for("race_console", slug=slug) + "?saved=sponsor")
+
+    @app.get("/races/<slug>/sponsors/<filename>")
+    def sponsor_logo(slug, filename):
+        race = console.open_race(slug)
+        if not SPONSOR_FILE.match(filename):
+            abort(404)
+        return send_from_directory(race.sponsor_dir, filename)
+
+    @app.post("/races/<slug>/runsignup")
+    def runsignup_settings(slug):
+        race = console.open_race(slug)
+        form = request.form
+        settings = {"enabled": 1 if form.get("enabled") else 0}
+        for field in race.RUNSIGNUP_FIELDS[1:]:
+            value = (form.get(field) or "").strip()
+            if value and not value.isdigit():
+                return redirect(url_for("race_console", slug=slug) + f"?error={field} must be a number")
+            settings[field] = int(value) if value else None
+        if settings["enabled"]:
+            if console.simulate:
+                return redirect(url_for("race_console", slug=slug)
+                                + "?error=RunSignup sending is off in simulate mode")
+            missing = [f for f in ("race_id", "adult_event_id", "adult_result_set_id") if not settings[f]]
+            if missing:
+                return redirect(url_for("race_console", slug=slug)
+                                + "?error=fill in " + ", ".join(missing) + " before turning sending on")
+        race.save_runsignup_settings(settings)
+        return redirect(url_for("race_console", slug=slug) + "?saved=runsignup")
+
+    def refresh(race: RaceDB) -> None:
+        """Show a correction everywhere: the live picture, or the stored results."""
+        session = console.session_for(race.directory.name)
+        if session is not None:
+            session.corrected()
+        elif race.info().effective_gun_time_utc is not None:
+            race.recompute()
 
     @app.post("/races/<slug>/export")
     def export(slug):
@@ -578,6 +876,10 @@ def main(argv=None) -> None:
         sim_clock_skew=args.sim_clock_skew,
     )
     app = create_app(console)
+    if not args.simulate:
+        # Simulated results must never reach a real race on RunSignup.
+        console.uploader = runsignup.Uploader(console)
+        console.uploader.start()
 
     mode = "SIMULATE (no hardware)" if args.simulate else f"reader at {args.reader_host}"
     print(f"Easymoose race timing, {mode}")

@@ -251,14 +251,14 @@ def test_a_whole_simulate_run_survives_a_skewed_reader_clock(tmp_path):
 
             # The point of the whole exercise: the field is timed correctly
             # despite the clocks disagreeing. Against the unfixed code a skew
-            # this size wrecks starts wholesale and the review pile fills up,
+            # this size wrecks starts wholesale and the gun time pile fills up,
             # so the runner the simulator deliberately denied a start should
             # be the only one in it.
             assert state["summary"]["finished"] > 0
             assert all(row["elapsed_seconds"] >= 720 for row in state["finishers"])
 
-            reviewed = {p["bib"] for p in state["participants"] if p["status"] == "review"}
-            assert reviewed == set(simulated_reader.expected_review_bibs)
+            gun_timed = {p["bib"] for p in state["participants"] if p["source"] == "gun"}
+            assert gun_timed == set(simulated_reader.expected_gun_time_bibs)
 
             # Statuses alone are too blunt to catch this: a 37 second error
             # moves every start without pushing anyone across a status

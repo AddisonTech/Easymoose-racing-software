@@ -29,8 +29,12 @@ from typing import Iterable, Sequence
 from reader import TagRead, normalize_epc
 from timing import (
     DEFAULT_MIN_ELAPSED_SECONDS,
+    SOURCE_CHIP,
+    Adjustment,
     Participant,
     ParticipantResult,
+    apply_adjustments,
+    category,
     compute_results,
     format_elapsed,
     places,
@@ -58,7 +62,8 @@ CREATE TABLE IF NOT EXISTS races (
     gun_time_utc INTEGER,
     gun_time_reader_utc INTEGER,
     status TEXT NOT NULL DEFAULT 'setup',
-    min_elapsed_seconds REAL NOT NULL DEFAULT 720
+    min_elapsed_seconds REAL NOT NULL DEFAULT 720,
+    stopped_utc INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS participants (
@@ -96,7 +101,47 @@ CREATE TABLE IF NOT EXISTS results (
     finish_utc INTEGER,
     elapsed_seconds REAL,
     status TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'chip',
+    gun_seconds REAL,
     UNIQUE (race_id, participant_id)
+);
+
+-- Operator corrections. Reads are never edited; these are laid over the
+-- results computed from them, so deleting a row gives the computed result back.
+CREATE TABLE IF NOT EXISTS adjustments (
+    participant_id INTEGER PRIMARY KEY REFERENCES participants(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    elapsed_seconds REAL,
+    finish_utc INTEGER,
+    updated_utc INTEGER NOT NULL
+);
+
+-- Where results go on RunSignup. One row, id 1.
+CREATE TABLE IF NOT EXISTS runsignup_settings (
+    id INTEGER PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    race_id INTEGER,
+    adult_event_id INTEGER,
+    adult_result_set_id INTEGER,
+    junior_event_id INTEGER,
+    junior_result_set_id INTEGER
+);
+
+-- What has been sent to RunSignup, so a change updates the same result.
+-- Sponsor logos for the tent display. The images live in sponsors/ in the
+-- race folder, named <id><ext>.
+CREATE TABLE IF NOT EXISTS sponsors (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    ext TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS runsignup_sent (
+    participant_id INTEGER PRIMARY KEY REFERENCES participants(id) ON DELETE CASCADE,
+    result_set_id INTEGER NOT NULL,
+    result_id INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    sent_utc INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS reads_epc_time ON reads (epc, first_seen_utc);
@@ -114,6 +159,9 @@ CSV_COLUMNS = [
     "finish_time",
     "elapsed",
     "status",
+    "timing",
+    "category",
+    "gun_time",
 ]
 
 
@@ -133,6 +181,7 @@ class RaceInfo:
     status: str
     min_elapsed_seconds: float
     directory: Path
+    stopped_utc: int | None = None
 
     @property
     def slug(self) -> str:
@@ -320,11 +369,18 @@ class RaceDB:
         value is left null; effective_gun_time_utc decides what a null means.
         """
         conn = self.connection
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(races)")}
-        if "gun_time_reader_utc" not in columns:
-            logger.info("adding gun_time_reader_utc to %s", self.path)
-            conn.execute("ALTER TABLE races ADD COLUMN gun_time_reader_utc INTEGER")
-            conn.commit()
+        added = [
+            ("races", "gun_time_reader_utc", "INTEGER"),
+            ("races", "stopped_utc", "INTEGER"),
+            ("results", "source", "TEXT NOT NULL DEFAULT 'chip'"),
+            ("results", "gun_seconds", "REAL"),
+        ]
+        for table, column, kind in added:
+            columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in columns:
+                logger.info("adding %s.%s to %s", table, column, self.path)
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+                conn.commit()
 
     # ------------------------------------------------------------------
     # race record
@@ -333,7 +389,7 @@ class RaceDB:
     def info(self) -> RaceInfo:
         row = self.connection.execute(
             "SELECT name, date, distance, gun_time_utc, gun_time_reader_utc, status,"
-            " min_elapsed_seconds FROM races WHERE id = ?",
+            " min_elapsed_seconds, stopped_utc FROM races WHERE id = ?",
             (RACE_ID,),
         ).fetchone()
         return RaceInfo(
@@ -345,6 +401,7 @@ class RaceDB:
             status=row["status"],
             min_elapsed_seconds=row["min_elapsed_seconds"],
             directory=self.directory,
+            stopped_utc=row["stopped_utc"],
         )
 
     def set_gun_time(self, gun_time_utc: int, reader_offset_micros: int) -> None:
@@ -372,6 +429,17 @@ class RaceDB:
         with self._write_lock:
             self.connection.execute(
                 "UPDATE races SET status = ? WHERE id = ?", (status, RACE_ID)
+            )
+            self.connection.commit()
+
+    def set_stopped(self, stopped_utc: int | None) -> None:
+        """When the reader was stopped, in the Pi's clock. None while it runs.
+
+        The race clock on screen stops here instead of counting on forever.
+        """
+        with self._write_lock:
+            self.connection.execute(
+                "UPDATE races SET stopped_utc = ? WHERE id = ?", (stopped_utc, RACE_ID)
             )
             self.connection.commit()
 
@@ -445,6 +513,24 @@ class RaceDB:
         ).fetchall()
         return {row["id"]: dict(row) for row in rows}
 
+    def participant_id_for_bib(self, bib: str) -> int | None:
+        row = self.connection.execute(
+            "SELECT id FROM participants WHERE race_id = ? AND bib = ?",
+            (RACE_ID, str(bib).strip()),
+        ).fetchone()
+        return row["id"] if row else None
+
+    def update_participant(self, participant_id: int, first_name: str, last_name: str,
+                           age: int | None, gender: str) -> None:
+        """Correct a runner's name, age or gender. Bib and tags stay as they are."""
+        with self._write_lock:
+            self.connection.execute(
+                "UPDATE participants SET first_name = ?, last_name = ?, age = ?, gender = ?"
+                " WHERE id = ? AND race_id = ?",
+                (first_name, last_name, age, gender, participant_id, RACE_ID),
+            )
+            self.connection.commit()
+
     def participant_count(self) -> int:
         return self.connection.execute(
             "SELECT COUNT(*) FROM participants WHERE race_id = ?", (RACE_ID,)
@@ -513,7 +599,7 @@ class RaceDB:
             conn.execute("DELETE FROM results WHERE race_id = ?", (RACE_ID,))
             conn.executemany(
                 "INSERT INTO results (race_id, participant_id, start_utc, finish_utc,"
-                " elapsed_seconds, status) VALUES (?, ?, ?, ?, ?, ?)",
+                " elapsed_seconds, status, source, gun_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         RACE_ID,
@@ -522,6 +608,8 @@ class RaceDB:
                         r.finish_utc,
                         r.elapsed_seconds,
                         r.status,
+                        r.source,
+                        r.gun_seconds,
                     )
                     for r in results
                 ],
@@ -532,7 +620,7 @@ class RaceDB:
         """Stored results, in bib order."""
         rows = self.connection.execute(
             "SELECT r.participant_id, p.bib, r.start_utc, r.finish_utc,"
-            " r.elapsed_seconds, r.status"
+            " r.elapsed_seconds, r.status, r.source, r.gun_seconds"
             " FROM results r JOIN participants p ON p.id = r.participant_id"
             " WHERE r.race_id = ?"
             " ORDER BY CAST(p.bib AS INTEGER), p.bib",
@@ -546,9 +634,91 @@ class RaceDB:
                 finish_utc=row["finish_utc"],
                 elapsed_seconds=row["elapsed_seconds"],
                 status=row["status"],
+                source=row["source"] or SOURCE_CHIP,
+                gun_seconds=row["gun_seconds"],
             )
             for row in rows
         ]
+
+    # ------------------------------------------------------------------
+    # operator corrections
+    # ------------------------------------------------------------------
+
+    def adjustments(self) -> dict[int, Adjustment]:
+        rows = self.connection.execute(
+            "SELECT participant_id, kind, elapsed_seconds, finish_utc FROM adjustments"
+        ).fetchall()
+        return {
+            row["participant_id"]: Adjustment(
+                row["participant_id"], row["kind"], row["elapsed_seconds"], row["finish_utc"]
+            )
+            for row in rows
+        }
+
+    def set_adjustments(self, adjustments: Iterable[Adjustment], now_utc: int) -> None:
+        """Save corrections together, so a swap is never half done."""
+        with self._write_lock:
+            conn = self.connection
+            conn.executemany(
+                "INSERT OR REPLACE INTO adjustments"
+                " (participant_id, kind, elapsed_seconds, finish_utc, updated_utc)"
+                " VALUES (?, ?, ?, ?, ?)",
+                [
+                    (a.participant_id, a.kind, a.elapsed_seconds, a.finish_utc, now_utc)
+                    for a in adjustments
+                ],
+            )
+            conn.commit()
+
+    def clear_adjustment(self, participant_id: int) -> bool:
+        with self._write_lock:
+            cursor = self.connection.execute(
+                "DELETE FROM adjustments WHERE participant_id = ?", (participant_id,)
+            )
+            self.connection.commit()
+        return cursor.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # RunSignup
+    # ------------------------------------------------------------------
+
+    RUNSIGNUP_FIELDS = ("enabled", "race_id", "adult_event_id", "adult_result_set_id",
+                        "junior_event_id", "junior_result_set_id")
+
+    def runsignup_settings(self) -> dict:
+        row = self.connection.execute(
+            "SELECT * FROM runsignup_settings WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return {field: (0 if field == "enabled" else None) for field in self.RUNSIGNUP_FIELDS}
+        return {field: row[field] for field in self.RUNSIGNUP_FIELDS}
+
+    def save_runsignup_settings(self, settings: dict) -> None:
+        values = [settings.get(field) for field in self.RUNSIGNUP_FIELDS]
+        with self._write_lock:
+            self.connection.execute(
+                "INSERT OR REPLACE INTO runsignup_settings (id, "
+                + ", ".join(self.RUNSIGNUP_FIELDS) + ") VALUES (1, ?, ?, ?, ?, ?, ?)",
+                values,
+            )
+            self.connection.commit()
+
+    def runsignup_sent(self) -> dict[int, dict]:
+        rows = self.connection.execute(
+            "SELECT participant_id, result_set_id, result_id, payload, sent_utc FROM runsignup_sent"
+        ).fetchall()
+        return {row["participant_id"]: dict(row) for row in rows}
+
+    def record_runsignup_sent(self, rows: Iterable[tuple[int, int, int, str]], now_utc: int) -> None:
+        """(participant_id, result_set_id, result_id, payload) for each result sent."""
+        with self._write_lock:
+            self.connection.executemany(
+                "INSERT OR REPLACE INTO runsignup_sent"
+                " (participant_id, result_set_id, result_id, payload, sent_utc)"
+                " VALUES (?, ?, ?, ?, ?)",
+                [(*row, now_utc) for row in rows],
+            )
+            self.connection.commit()
 
     def recompute(self) -> list[ParticipantResult]:
         """Rebuild the results table from the raw read log.
@@ -557,11 +727,15 @@ class RaceDB:
         it, and the test suite holds the two to the same answer.
         """
         info = self.info()
-        results = compute_results(
-            self.reads(),
-            self.participants(),
+        results = apply_adjustments(
+            compute_results(
+                self.reads(),
+                self.participants(),
+                info.effective_gun_time_utc,
+                info.min_elapsed_seconds,
+            ),
+            self.adjustments(),
             info.effective_gun_time_utc,
-            info.min_elapsed_seconds,
         )
         self.save_results(results)
         return results
@@ -617,9 +791,49 @@ class RaceDB:
                         format_clock(result.finish_utc),
                         format_elapsed(result.elapsed_seconds),
                         result.status,
+                        result.source if result.elapsed_seconds is not None else "",
+                        category(person.get("age"), person.get("gender")) or "",
+                        format_elapsed(result.gun_seconds),
                     ]
                 )
         return path
+
+    # ------------------------------------------------------------------
+    # sponsors
+    # ------------------------------------------------------------------
+
+    @property
+    def sponsor_dir(self) -> Path:
+        return self.directory / "sponsors"
+
+    def sponsors(self) -> list[dict]:
+        """Sponsors in the order they were added, with their image filename."""
+        rows = self.connection.execute("SELECT id, name, ext FROM sponsors ORDER BY id").fetchall()
+        return [{"id": row["id"], "name": row["name"], "file": f"{row['id']}{row['ext']}"}
+                for row in rows]
+
+    def add_sponsor(self, name: str, ext: str, image: bytes) -> dict:
+        self.sponsor_dir.mkdir(exist_ok=True)
+        with self._write_lock:
+            cursor = self.connection.execute(
+                "INSERT INTO sponsors (name, ext) VALUES (?, ?)", (name, ext)
+            )
+            sponsor_id = cursor.lastrowid
+            (self.sponsor_dir / f"{sponsor_id}{ext}").write_bytes(image)
+            self.connection.commit()
+        return {"id": sponsor_id, "name": name, "file": f"{sponsor_id}{ext}"}
+
+    def remove_sponsor(self, sponsor_id: int) -> bool:
+        with self._write_lock:
+            row = self.connection.execute(
+                "SELECT ext FROM sponsors WHERE id = ?", (sponsor_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            self.connection.execute("DELETE FROM sponsors WHERE id = ?", (sponsor_id,))
+            self.connection.commit()
+        (self.sponsor_dir / f"{sponsor_id}{row['ext']}").unlink(missing_ok=True)
+        return True
 
     def exports(self) -> list[Path]:
         """Every export taken for this race, newest first."""
